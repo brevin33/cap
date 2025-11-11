@@ -1,0 +1,7 @@
+
+
+i32 main(){
+	i32 a = 2
+	i32 b = a
+	return 0
+}

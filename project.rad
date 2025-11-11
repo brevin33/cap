@@ -1,0 +1,25 @@
+// raddbg 0.9.21 project file
+
+recent_file: path: "scratch/main.c"
+recent_file: path: "cap_lang/src/semantic.c"
+recent_file: path: "cap_lang/src/project.c"
+recent_file: path: "cap_lang/src/ast.c"
+recent_file: path: "cap_lang/src/log.c"
+recent_file: path: "../../../../Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/ucrt/stdio.h"
+recent_file: path: "cap_lang/src/file.c"
+recent_file: path: "cap_lang/src/lists.c"
+recent_file: path: "../Span/.cache/clangd/index/arena.c.F5B12CCE3B341B10.idx"
+recent_file: path: "cap_lang/src/tokens.c"
+recent_file: path: "base/src/basic.c"
+recent_file: path: "base/src/arena.c"
+target:
+{
+  executable: "out/Debug/scratch/cap_scratch.exe"
+  working_directory: "out/Debug/scratch"
+  enabled: 1
+}
+breakpoint:
+{
+  source_location: "cap_lang/src/semantic.c:279:1"
+  hit_count: 0
+}

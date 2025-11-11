@@ -1,0 +1,172 @@
+#pragma once
+
+#include "cap/ast.h"
+
+typedef enum Type_Kind {
+    type_invalid = 0,
+    type_int,
+    type_float,
+    type_uint,
+    type_const_int,
+    type_const_float,
+} Type_Kind;
+
+typedef struct Type_Base {
+    Ast* ast;
+    Type_Kind kind;
+    char* name;
+    union {
+        u32 number_bit_size;
+    };
+} Type_Base;
+
+typedef struct Type {
+    Type_Base* base;
+    u32 base_allocator_id;
+    u32* ptr_allocator_ids;
+    u16 ptr_count;
+    bool is_ref;
+} Type;
+
+typedef struct Function_Parameter {
+    Ast* ast;
+    Type type;
+    char* name;
+} Function_Parameter;
+
+typedef struct Variable {
+    Type type;
+    char* name;
+    Ast* ast;
+} Variable;
+
+typedef enum Expression_Kind {
+    expression_invalid = 0,
+    expression_int,
+    expression_float,
+    expression_variable,
+} Expression_Kind;
+
+typedef struct Expression_Int {
+    char* value;
+} Expression_Int;
+
+typedef struct Expression_Float {
+    double value;
+} Expression_Float;
+
+typedef struct Expression_Variable {
+    Variable* variable;
+} Expression_Variable;
+
+typedef struct Expression {
+    Ast* ast;
+    Type type;
+    Expression_Kind kind;
+    union {
+        Expression_Int int_;
+        Expression_Float float_;
+        Expression_Variable variable;
+    };
+} Expression;
+
+typedef enum Statement_Type {
+    statement_invalid = 0,
+    statement_assignment,
+    statement_return,
+    statement_expression,
+    statement_variable_declaration,
+} Statement_Type;
+
+typedef struct Statement_Variable_Declaration {
+    Variable* variable;
+    Statement* assignment;
+} Statement_Variable_Declaration;
+
+typedef struct Statement_Assignment {
+    Expression assignee;
+    Expression value;
+} Statement_Assignment;
+
+typedef struct Statement_Return {
+    Expression value;
+} Statement_Return;
+
+typedef struct Statement_Expression {
+    Expression value;
+} Statement_Expression;
+
+typedef struct Statement {
+    Ast* ast;
+    Statement_Type type;
+    union {
+        Statement_Assignment assignment;
+        Statement_Return return_;
+        Statement_Expression expression;
+        Statement_Variable_Declaration variable_declaration;
+    };
+} Statement;
+
+typedef struct Scope Scope;
+typedef struct Scope {
+    Ast* ast;
+    Scope* parent;
+    Variable_Ptr_List variables;
+    Statement_List statements;
+} Scope;
+
+typedef struct Templated_Function {
+    Function* function;
+    Scope body;
+    u32 allocator_id_counter;
+} Templated_Function;
+
+typedef struct Function {
+    Ast* ast;
+    Type return_type;
+    char* name;
+    Function_Parameter_List parameters;
+    Templated_Function_Ptr_List templated_functions;
+    bool is_prototype;
+    bool is_template_function;
+} Function;
+
+Function* sem_function_prototype(Ast* ast);
+
+void sem_templated_function_implement(Templated_Function* function);
+
+Type sem_type_parse(Ast* ast, u32* allocator_id_counter);
+
+Type sem_type_get_const_int(u32* allocator_id_counter);
+
+Type sem_type_get_const_float(u32* allocator_id_counter);
+
+Type_Base* sem_find_type_base(const char* name);
+
+void sem_default_setup_types();
+
+Type_Base* add_number_type_base(u32 number_bit_size, Type_Kind kind);
+
+Variable* sem_scope_add_variable(Scope* scope, Variable* variable);
+
+Variable* sem_scope_get_variable(Scope* scope, char* name);
+
+void sem_scope_implement(Scope* scope, Templated_Function* templated_function);
+
+Statement sem_statement_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Statement sem_statement_assignment_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Statement sem_statement_return_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Statement sem_statement_expression_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Statement sem_statement_variable_declaration_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Expression sem_expression_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Expression sem_expression_variable_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Expression sem_expression_int_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Expression sem_expression_float_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
