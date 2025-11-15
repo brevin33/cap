@@ -238,6 +238,11 @@ Statement sem_statement_variable_declaration_parse(Ast* ast, Scope* scope, Templ
 
     Variable variable;
     variable.type = sem_type_parse(ast->variable_declaration.type, &templated_function->allocator_id_counter);
+    if (!sem_set_allocator(templated_function, variable.type.base_allocator_id, &STACK_ALLOCATOR)) {
+        log_error_ast(ast, "could not set stack allocator");
+        Statement err = {0};
+        return err;
+    }
     variable.name = ast->variable_declaration.name;
     variable.ast = ast;
 
@@ -317,4 +322,71 @@ Expression sem_expression_float_parse(Ast* ast, Scope* scope, Templated_Function
     expression.kind = expression_float;
     expression.float_.value = value;
     return expression;
+}
+
+static void sem_handel_graph_additions_if_needed(Templated_Function* templated_function, u32 allocator_id) {
+    u32 number_of_allocators = templated_function->allocators.count;
+    if (number_of_allocators <= allocator_id) {
+        for (u32 i = number_of_allocators; i <= allocator_id; i++) {
+            Allocator base_allocator = {0};
+            Allocator_List_add(&templated_function->allocators, &base_allocator);
+
+            u32_List base_connection = {0};
+            u32_List_List_add(&templated_function->allocator_id_connections, &base_connection);
+        }
+    }
+}
+
+bool sem_allocator_are_the_same(Allocator* allocator1, Allocator* allocator2) {
+    return allocator1->variable == allocator2->variable;
+}
+
+bool sem_added_allocator_id_connection(Templated_Function* templated_function, u32 allocator_id1, u32 allocator_id2) {
+    sem_handel_graph_additions_if_needed(templated_function, allocator_id1);
+
+    Allocator* allocator1 = sem_allocator_get(templated_function, allocator_id1);
+    Allocator* allocator2 = sem_allocator_get(templated_function, allocator_id2);
+
+    if (!sem_allocator_are_the_same(allocator1, allocator2)) {
+        if (sem_allocator_are_the_same(allocator1, &UNDEFINED_ALLOCATOR)) {
+            sem_set_allocator(templated_function, allocator_id1, allocator2);
+        } else if (sem_allocator_are_the_same(allocator2, &UNDEFINED_ALLOCATOR)) {
+            sem_set_allocator(templated_function, allocator_id2, allocator1);
+        } else {
+            return false;
+        }
+    }
+
+    u32_List* connections1 = &templated_function->allocator_id_connections.data[allocator_id1];
+    u32_List_add(connections1, &allocator_id2);
+
+    u32_List* connections2 = &templated_function->allocator_id_connections.data[allocator_id2];
+    u32_List_add(connections2, &allocator_id1);
+
+    return true;
+}
+
+bool sem_set_allocator(Templated_Function* templated_function, u32 allocator_id, Allocator* allocator) {
+    sem_handel_graph_additions_if_needed(templated_function, allocator_id);
+
+    Allocator* existing_allocator = sem_allocator_get(templated_function, allocator_id);
+    if (sem_allocator_are_the_same(existing_allocator, allocator)) return true;
+    if (!sem_allocator_are_the_same(existing_allocator, &UNDEFINED_ALLOCATOR)) return false;
+
+    *Allocator_List_get(&templated_function->allocators, allocator_id) = *allocator;
+    u32_List connections = templated_function->allocator_id_connections.data[allocator_id];
+    for (u32 i = 0; i < connections.count; i++) {
+        u32 connection = *u32_List_get(&connections, i);
+        Allocator* connection_allocator = sem_allocator_get(templated_function, connection);
+        if (sem_allocator_are_the_same(connection_allocator, allocator)) continue;
+        bool res = sem_set_allocator(templated_function, connection, allocator);
+        massert(res, "should have set allocator");
+    }
+
+    return true;
+}
+
+Allocator* sem_allocator_get(Templated_Function* templated_function, u32 allocator_id) {
+    sem_handel_graph_additions_if_needed(templated_function, allocator_id);
+    return &templated_function->allocators.data[allocator_id];
 }

@@ -115,10 +115,25 @@ typedef struct Scope {
     Statement_List statements;
 } Scope;
 
+typedef struct Allocator {
+    Variable* variable;
+} Allocator;
+
+#define UNDEFINED_ALLOCATOR \
+    (Allocator) { .variable = NULL }
+
+#define STACK_ALLOCATOR \
+    (Allocator){.variable = (Variable*)1}
+
+#define LOOSE_ALLOCATOR \
+    (Allocator){.variable = (Variable*)2}
+
 typedef struct Templated_Function {
     Function* function;
     Scope body;
     u32 allocator_id_counter;
+    Allocator_List allocators;
+    u32_List_List allocator_id_connections;
 } Templated_Function;
 
 typedef struct Function {
@@ -134,6 +149,14 @@ typedef struct Function {
 Function* sem_function_prototype(Ast* ast);
 
 void sem_templated_function_implement(Templated_Function* function);
+
+bool sem_added_allocator_id_connection(Templated_Function* templated_function, u32 allocator_id1, u32 allocator_id2);
+
+bool sem_set_allocator(Templated_Function* templated_function, u32 allocator_id, Allocator* allocator);
+
+Allocator* sem_allocator_get(Templated_Function* templated_function, u32 allocator_id);
+
+bool sem_allocator_are_the_same(Allocator* allocator1, Allocator* allocator2);
 
 Type sem_type_parse(Ast* ast, u32* allocator_id_counter);
 

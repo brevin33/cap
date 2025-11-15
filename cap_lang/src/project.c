@@ -22,28 +22,6 @@ Project* project_create(const char* dir_path) {
         File_Ptr_List_add(&project->files, &file);
     }
 
-    sem_default_setup_types();
-
-    for (u64 i = 0; i < project->files.count; i++) {
-        File* file = *File_Ptr_List_get(&project->files, i);
-        for (u64 j = 0; j < file->ast.top_level.functions.count; j++) {
-            Ast* ast = &file->ast.top_level.functions.data[j];
-            Function* function = sem_function_prototype(ast);
-            Function_Ptr_List_add(&file->functions, &function);
-        }
-    }
-
-    for (u64 i = 0; i < project->files.count; i++) {
-        File* file = *File_Ptr_List_get(&project->files, i);
-        for (u64 j = 0; j < file->functions.count; j++) {
-            Function* function = *Function_Ptr_List_get(&file->functions, j);
-            for (u64 k = 0; k < function->templated_functions.count; k++) {
-                Templated_Function* templated_function = *Templated_Function_Ptr_List_get(&function->templated_functions, k);
-                sem_templated_function_implement(templated_function);
-            }
-        }
-    }
-
     return project;
 }
 
@@ -91,4 +69,55 @@ u32 file_get_front_of_line(File* file, u32 line) {
         current_line++;
     }
     return index;
+}
+
+void project_semantic_analysis(Project* project) {
+    sem_default_setup_types();
+    for (u64 i = 0; i < project->files.count; i++) {
+        File* file = *File_Ptr_List_get(&project->files, i);
+        for (u64 j = 0; j < file->ast.top_level.functions.count; j++) {
+            Ast* ast = &file->ast.top_level.functions.data[j];
+            Function* function = sem_function_prototype(ast);
+            Function_Ptr_List_add(&file->functions, &function);
+        }
+    }
+
+    for (u64 i = 0; i < project->files.count; i++) {
+        File* file = *File_Ptr_List_get(&project->files, i);
+        for (u64 j = 0; j < file->functions.count; j++) {
+            Function* function = *Function_Ptr_List_get(&file->functions, j);
+            for (u64 k = 0; k < function->templated_functions.count; k++) {
+                Templated_Function* templated_function = *Templated_Function_Ptr_List_get(&function->templated_functions, k);
+                sem_templated_function_implement(templated_function);
+            }
+        }
+    }
+}
+
+void project_compile_llvm(Project* project) {
+    // compilation starts
+    LLVMInitializeAllAsmParsers();
+    LLVMInitializeAllTargetInfos();
+    LLVMInitializeAllTargets();
+    LLVMInitializeAllTargetMCs();
+    LLVMInitializeAllAsmPrinters();
+    LLVMInitializeAllDisassemblers();
+    char* triple = LLVMGetDefaultTargetTriple();
+
+    cap_context.llvm_info.llvm_context = LLVMContextCreate();
+    cap_context.llvm_info.module = LLVMModuleCreateWithName("cap");
+    cap_context.llvm_info.builder = LLVMCreateBuilder();
+
+    char* error;
+    LLVMTargetRef target;
+    if (LLVMGetTargetFromTriple(triple, &target, &error) != 0) {
+        fprintf(stderr, "Failed to get target: %s\n", error);
+        LLVMDisposeMessage(error);
+        return;
+    }
+
+    LLVMTargetMachineRef targetMachine;
+    targetMachine = LLVMCreateTargetMachine(target, triple, "", "", LLVMCodeGenLevelDefault, LLVMRelocDefault, LLVMCodeModelDefault);
+
+    cap_context.llvm_info.data_layout = LLVMCreateTargetDataLayout(targetMachine);
 }

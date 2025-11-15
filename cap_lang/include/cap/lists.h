@@ -22,8 +22,15 @@ create_list_headers(Function_Ptr_List, Function *);
 typedef struct Variable Variable;
 create_list_headers(Variable_Ptr_List, Variable *);
 
+typedef struct Allocator Allocator;
+create_list_headers(Allocator_List, Allocator);
+
 typedef struct Templated_Function Templated_Function;
 create_list_headers(Templated_Function_Ptr_List, Templated_Function *);
 
 typedef struct Statement Statement;
 create_list_headers(Statement_List, Statement);
+
+create_list_headers(u32_List, u32);
+
+create_list_headers(u32_List_List, u32_List);

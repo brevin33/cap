@@ -17,3 +17,9 @@ create_list_impl(Variable_Ptr_List, Variable*);
 create_list_impl(Templated_Function_Ptr_List, Templated_Function*);
 
 create_list_impl(Statement_List, Statement);
+
+create_list_impl(Allocator_List, Allocator);
+
+create_list_impl(u32_List, u32);
+
+create_list_impl(u32_List_List, u32_List);
