@@ -48,6 +48,10 @@ Ast ast_from_tokens(Token* token_start) {
                 Ast_List_add(&ast.top_level.functions, &val);
                 break;
             }
+            case ast_program: {
+                Ast_List_add(&ast.top_level.programs, &val);
+                break;
+            }
             case ast_invalid: {
                 while (true) {
                     if (token->type == tt_lbrace) {
@@ -456,6 +460,36 @@ Ast ast_body_parse(Token** tokens) {
     return ast;
 }
 
+Ast ast_program_parse(Token** tokens) {
+    Token* token = *tokens;
+    Ast err = {0};
+    Ast ast = {0};
+    ast.token_start = token;
+    ast.kind = ast_program;
+
+    if (token->type != tt_program) {
+        log_error_token(token, "expected program token when parsing program");
+        return err;
+    }
+    token++;
+
+    if (token->type != tt_id) {
+        log_error_token(token, "expected program name when parsing program");
+        return err;
+    }
+    ast.program.name = token_get_id(token);
+    token++;
+
+    Ast body = ast_body_parse(&token);
+    if (body.kind == ast_invalid) return body;
+    ast.program.body = alloc(sizeof(Ast));
+    *ast.program.body = body;
+
+    ast.num_tokens = token - *tokens;
+    *tokens = token;
+    return ast;
+}
+
 Ast ast_function_declaration_parse(Token** tokens) {
     Token* token = *tokens;
     Ast err = {0};
@@ -518,6 +552,10 @@ Ast ast_general_parse(Token** tokens) {
         }
         case tt_return: {
             return ast_return_parse(tokens);
+            break;
+        }
+        case tt_program: {
+            return ast_program_parse(tokens);
             break;
         }
         default: {

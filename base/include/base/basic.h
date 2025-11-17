@@ -2,7 +2,6 @@
 #include "assert.h"
 #include "math.h"
 #include "stdarg.h"
-#include "stdbool.h"
 #include "stdint.h"
 #include "stdio.h"
 #include "stdlib.h"
@@ -40,6 +39,9 @@ typedef uint32_t u32;
 typedef uint64_t u64;
 typedef float f32;
 typedef double f64;
+typedef _Bool bool;
+#define true 1
+#define false 0
 
 void print_until_delimiter(const char* input, char delimiter);
 
@@ -68,6 +70,10 @@ char** get_file_in_directory(const char* path_, u64* out_count);
 bool delete_file(const char* path);
 
 bool delete_directory(const char* path);
+
+bool link_obj_to_exe(const char* obj_path, const char* exe_path);
+
+bool make_directory(const char* path);
 
 #define CASE_NUMBER \
     case '0':       \

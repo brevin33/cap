@@ -1,24 +1,55 @@
+#include "cap/semantic.h"
+
 #include "cap.h"
 #include "cap/ast.h"
 #include "cap/lists.h"
 
-void sem_templated_function_implement(Templated_Function* templated_function) {
+Program* sem_program_parse(Ast* ast) {
+    massert(ast->kind == ast_program, "should have found a program");
+    Program* program = alloc(sizeof(Program));
+    program->ast = ast;
+    program->name = ast->program.name;
+
+    program->body.ast = ast;
+    u32 fake_allocator_id_counter = 0;
+    program->body.return_type = sem_get_int_type(32, &fake_allocator_id_counter);
+    program->body.name = ast->program.name;
+    program->body.is_program = true;
+
+    Templated_Function* templated_function = alloc(sizeof(Templated_Function));
+    templated_function->function = &program->body;
+    Templated_Function_Ptr_List_add(&program->body.templated_functions, &templated_function);
+
+    sem_templated_function_implement(program->body.templated_functions.data[0], ast->program.body);
+
+    return program;
+}
+
+void sem_templated_function_implement(Templated_Function* templated_function, Ast* scope_ast) {
     Function* function = templated_function->function;
     massert(!function->is_prototype, "should not be a prototype");
 
     templated_function->body.parent = NULL;
-    templated_function->body.ast = function->ast->function_declaration.body;
+    templated_function->body.ast = scope_ast;
+
+    if (templated_function->function->is_program) {
+        templated_function->return_type = sem_get_int_type(32, &templated_function->allocator_id_counter);
+    } else {
+        templated_function->return_type = sem_type_parse(templated_function->function->ast->function_declaration.return_type, &templated_function->allocator_id_counter);
+        massert(templated_function->return_type.base->kind != type_invalid, "should have found a valid return type");
+    }
 
     for (u32 i = 0; i < function->parameters.count; i++) {
         Function_Parameter* parameter = Function_Parameter_List_get(&function->parameters, i);
         Variable variable;
         Ast* parameter_ast = parameter->ast;
         variable.type = sem_type_parse(parameter_ast->declaration_parameter.type, &templated_function->allocator_id_counter);
+        massert(variable.type.base->kind != type_invalid, "should have found a valid type");
         variable.name = parameter->name;
         variable.ast = parameter->ast;
-        sem_scope_add_variable(&templated_function->body, &variable);
+        sem_scope_add_variable(&templated_function->parameter_scope, &variable, templated_function);
     }
-
+    templated_function->body.parent = &templated_function->parameter_scope;
     sem_scope_implement(&templated_function->body, templated_function);
 }
 
@@ -28,6 +59,7 @@ Function* sem_function_prototype(Ast* ast) {
     function->ast = ast;
     u32 fake_allocator_id_counter = 0;
     function->return_type = sem_type_parse(ast->function_declaration.return_type, &fake_allocator_id_counter);
+    if (function->return_type.base->kind == type_invalid) return NULL;
     function->name = ast->function_declaration.name;
 
     for (u32 i = 0; i < ast->function_declaration.parameter_list->declaration_parameter_list.parameters.count; i++) {
@@ -35,6 +67,7 @@ Function* sem_function_prototype(Ast* ast) {
         Function_Parameter parameter;
         parameter.ast = parameter_ast;
         parameter.type = sem_type_parse(parameter_ast->declaration_parameter.type, &fake_allocator_id_counter);
+        if (parameter.type.base->kind == type_invalid) continue;
         parameter.name = parameter_ast->declaration_parameter.name;
         Function_Parameter_List_add(&function->parameters, &parameter);
     }
@@ -82,8 +115,20 @@ void sem_default_setup_types() {
 
 Type_Base* add_number_type_base(u32 number_bit_size, Type_Kind kind) {
     Type_Base* type_base = alloc(sizeof(Type_Base));
-    type_base->name = alloc(sizeof("number"));
-    memcpy(type_base->name, "number", sizeof("number"));
+
+    u64 number_of_digits = get_number_of_digits(number_bit_size);
+    char* type_name = alloc(number_of_digits + 2);
+    if (kind == type_int) {
+        sprintf(type_name, "i%u", number_bit_size);
+    } else if (kind == type_float) {
+        sprintf(type_name, "f%u", number_bit_size);
+    } else if (kind == type_uint) {
+        sprintf(type_name, "u%u", number_bit_size);
+    } else {
+        massert(false, "should have found a valid type");
+    }
+    type_base->name = type_name;
+
     type_base->kind = kind;
     type_base->number_bit_size = number_bit_size;
     Type_Base_Ptr_List_add(&cap_context.types, &type_base);
@@ -148,6 +193,45 @@ Type sem_type_get_const_float(u32* allocator_id_counter) {
     return type;
 }
 
+Type sem_get_int_type(u32 bit_size, u32* allocator_id_counter) {
+    Type type = {0};
+    u64 number_of_digits = get_number_of_digits(bit_size);
+    char* type_name = alloc(number_of_digits + 2);
+    sprintf(type_name, "i%u", bit_size);
+    type.base = sem_find_type_base(type_name);
+    type.base_allocator_id = *allocator_id_counter;
+    *allocator_id_counter += 1;
+    type.ptr_count = 0;
+    type.is_ref = false;
+    return type;
+}
+
+Type sem_get_float_type(u32 number_bit_size, u32* allocator_id_counter) {
+    Type type = {0};
+    u64 number_of_digits = get_number_of_digits(number_bit_size);
+    char* type_name = alloc(number_of_digits + 2);
+    sprintf(type_name, "f%u", number_bit_size);
+    type.base = sem_find_type_base(type_name);
+    type.base_allocator_id = *allocator_id_counter;
+    *allocator_id_counter += 1;
+    type.ptr_count = 0;
+    type.is_ref = false;
+    return type;
+}
+
+Type sem_get_uint_type(u32 bit_size, u32* allocator_id_counter) {
+    Type type = {0};
+    u64 number_of_digits = get_number_of_digits(bit_size);
+    char* type_name = alloc(number_of_digits + 2);
+    sprintf(type_name, "u%u", bit_size);
+    type.base = sem_find_type_base(type_name);
+    type.base_allocator_id = *allocator_id_counter;
+    *allocator_id_counter += 1;
+    type.ptr_count = 0;
+    type.is_ref = false;
+    return type;
+}
+
 Variable* sem_scope_get_variable(Scope* scope, char* name) {
     for (u32 i = 0; i < scope->variables.count; i++) {
         Variable* variable = *Variable_Ptr_List_get(&scope->variables, i);
@@ -161,7 +245,17 @@ Variable* sem_scope_get_variable(Scope* scope, char* name) {
     return NULL;
 }
 
-Variable* sem_scope_add_variable(Scope* scope, Variable* variable) {
+Variable* sem_scope_add_variable(Scope* scope, Variable* variable, Templated_Function* templated_function) {
+    if (!variable->type.is_ref) {
+        variable->type.ref_allocator_id = templated_function->allocator_id_counter;
+        templated_function->allocator_id_counter += 1;
+        if (!sem_set_allocator(templated_function, variable->type.ref_allocator_id, &STACK_ALLOCATOR)) {
+            massert(false, "could not set stack allocator");
+            return NULL;
+        }
+        variable->type.is_ref = true;
+    }
+
     for (u32 i = 0; i < scope->variables.count; i++) {
         Variable* existing_variable = *Variable_Ptr_List_get(&scope->variables, i);
         if (strcmp(existing_variable->name, variable->name) == 0) {
@@ -185,6 +279,7 @@ Statement sem_statement_parse(Ast* ast, Scope* scope, Templated_Function* templa
             return sem_statement_expression_parse(ast, scope, templated_function);
         case ast_variable_declaration:
             return sem_statement_variable_declaration_parse(ast, scope, templated_function);
+        case ast_program:
         case ast_int:
         case ast_float:
         case ast_variable:
@@ -204,54 +299,71 @@ Statement sem_statement_parse(Ast* ast, Scope* scope, Templated_Function* templa
 
 Statement sem_statement_assignment_parse(Ast* ast, Scope* scope, Templated_Function* templated_function) {
     massert(ast->kind == ast_assignment, "should have found an assignment");
+    Statement err = {0};
     Statement statement = {0};
     statement.ast = ast;
     statement.type = statement_assignment;
+
     statement.assignment.assignee = sem_expression_parse(ast->assignment.assignee, scope, templated_function);
+    if (statement.assignment.assignee.kind == expression_invalid) return err;
+    if (!statement.assignment.assignee.type.is_ref) {
+        log_error_ast(ast->assignment.assignee, "cannot assign to a non reference value");
+        return err;
+    }
+    Type deref_type = sem_dereference_type(&statement.assignment.assignee.type);
+
     statement.assignment.value = sem_expression_parse(ast->assignment.value, scope, templated_function);
+    if (statement.assignment.value.kind == expression_invalid) return err;
+    statement.assignment.value = sem_expression_implicit_cast(&statement.assignment.value, &deref_type, templated_function);
+    if (statement.assignment.value.kind == expression_invalid) return err;
+
     return statement;
 }
 
 Statement sem_statement_return_parse(Ast* ast, Scope* scope, Templated_Function* templated_function) {
     massert(ast->kind == ast_return, "should have found a return");
+    Statement err = {0};
     Statement statement = {0};
     statement.ast = ast;
     statement.type = statement_return;
     statement.return_.value = sem_expression_parse(ast->return_.value, scope, templated_function);
+    if (statement.return_.value.kind == expression_invalid) return err;
+    statement.return_.value = sem_expression_implicit_cast(&statement.return_.value, &templated_function->return_type, templated_function);
+    if (statement.return_.value.kind == expression_invalid) return err;
     return statement;
 }
 
 Statement sem_statement_expression_parse(Ast* ast, Scope* scope, Templated_Function* templated_function) {
     massert(ast->kind == ast_expression, "should have found an expression");
+    Statement err = {0};
     Statement statement = {0};
     statement.ast = ast;
     statement.type = statement_expression;
     statement.expression.value = sem_expression_parse(ast->expression.value, scope, templated_function);
+    if (statement.expression.value.kind == expression_invalid) return err;
     return statement;
 }
 
 Statement sem_statement_variable_declaration_parse(Ast* ast, Scope* scope, Templated_Function* templated_function) {
     massert(ast->kind == ast_variable_declaration, "should have found a variable declaration");
+    Statement err = {0};
     Statement statement = {0};
     statement.ast = ast;
     statement.type = statement_variable_declaration;
 
     Variable variable;
     variable.type = sem_type_parse(ast->variable_declaration.type, &templated_function->allocator_id_counter);
-    if (!sem_set_allocator(templated_function, variable.type.base_allocator_id, &STACK_ALLOCATOR)) {
-        log_error_ast(ast, "could not set stack allocator");
-        Statement err = {0};
-        return err;
-    }
+    if (variable.type.base->kind == type_invalid) return err;
     variable.name = ast->variable_declaration.name;
     variable.ast = ast;
 
-    Variable* in_scope = sem_scope_add_variable(scope, &variable);
+    Variable* in_scope = sem_scope_add_variable(scope, &variable, templated_function);
+    if (in_scope == NULL) return err;
     statement.variable_declaration.variable = in_scope;
 
     if (ast->variable_declaration.assignment != NULL) {
         Statement assignment = sem_statement_assignment_parse(ast->variable_declaration.assignment, scope, templated_function);
-        if (assignment.type == statement_invalid) return assignment;
+        if (assignment.type == statement_invalid) return err;
         statement.variable_declaration.assignment = alloc(sizeof(Statement));
         *statement.variable_declaration.assignment = assignment;
     } else {
@@ -273,6 +385,7 @@ Expression sem_expression_parse(Ast* ast, Scope* scope, Templated_Function* temp
             return sem_expression_variable_parse(value_ast, scope, templated_function);
         case ast_variable_declaration:
         case ast_invalid:
+        case ast_program:
         case ast_top_level:
         case ast_function_declaration:
         case ast_declaration_parameter_list:
@@ -299,6 +412,7 @@ Expression sem_expression_variable_parse(Ast* ast, Scope* scope, Templated_Funct
     Expression expression = {0};
     expression.ast = ast;
     expression.type = variable->type;
+    massert(variable->type.is_ref, "should have found a ref");
     expression.kind = expression_variable;
     expression.variable.variable = variable;
     return expression;
@@ -324,6 +438,88 @@ Expression sem_expression_float_parse(Ast* ast, Scope* scope, Templated_Function
     return expression;
 }
 
+bool sem_can_implicitly_cast(Type* from_type_, Type* to_type_) {
+    Type from_type = *from_type_;
+    Type to_type = *to_type_;
+    if (from_type.is_ref && !to_type.is_ref) {
+        from_type = sem_dereference_type(&from_type);
+    }
+    if (sem_type_is_equal_without_allocator_id(&from_type, &to_type)) {
+        return true;
+    }
+
+    Type_Kind from_kind = sem_get_type_kind(&from_type);
+    Type_Kind to_kind = sem_get_type_kind(&to_type);
+
+    if ((from_kind == type_int && to_kind == type_int) ||
+        (from_kind == type_uint && to_kind == type_uint)) {
+        u64 from_bit_size = from_type.base->number_bit_size;
+        u64 to_bit_size = to_type.base->number_bit_size;
+        if (from_bit_size < to_bit_size) {
+            return true;
+        }
+    }
+    if (from_kind == type_float && to_kind == type_float) {
+        return true;
+    }
+
+    if (from_kind == type_const_float && to_kind == type_float) {
+        return true;
+    }
+
+    if (from_kind == type_const_int && to_kind == type_int) {
+        return true;
+    }
+    if (from_kind == type_const_int && to_kind == type_uint) {
+        return true;
+    }
+    if (from_kind == type_const_int && to_kind == type_float) {
+        return true;
+    }
+
+    return false;
+}
+
+Expression sem_expression_implicit_cast(Expression* expression, Type* type, Templated_Function* templated_function) {
+    Type from_type = expression->type;
+    Type to_type = *type;
+    Expression expression_to_cast = *expression;
+    if (from_type.is_ref && !to_type.is_ref) {
+        Type deref_type = sem_dereference_type(&from_type);
+        expression_to_cast = sem_expression_cast(expression, &deref_type, templated_function);
+        if (expression_to_cast.kind == expression_invalid) return expression_to_cast;
+    }
+
+    if (!sem_can_implicitly_cast(&from_type, &to_type)) {
+        char* from_type_name = sem_type_name(&from_type);
+        char* to_type_name = sem_type_name(&to_type);
+        log_error_ast(expression->ast, "could not implicitly cast from %s to %s", from_type_name, to_type_name);
+        return (Expression){0};
+    }
+
+    Expression expression_new = sem_expression_cast(expression, &to_type, templated_function);
+    if (expression_new.kind == expression_invalid) return expression_new;
+    return expression_new;
+}
+
+Expression sem_expression_cast(Expression* expression, Type* type, Templated_Function* templated_function) {
+    Type* old_type = &expression->type;
+
+    bool res = sem_add_type_allocator_id_connection(templated_function, old_type, type);
+    if (!res) {
+        log_error_ast(expression->ast, "could not cast from %s to %s: becuase of allocators", sem_type_name(old_type), sem_type_name(type));
+        return (Expression){0};
+    }
+
+    Expression expression_new = {0};
+    expression_new.ast = expression->ast;
+    expression_new.kind = expression_cast;
+    expression_new.type = *type;
+    expression_new.cast.expression = alloc(sizeof(Expression));
+    *expression_new.cast.expression = *expression;
+    return expression_new;
+}
+
 static void sem_handel_graph_additions_if_needed(Templated_Function* templated_function, u32 allocator_id) {
     u32 number_of_allocators = templated_function->allocators.count;
     if (number_of_allocators <= allocator_id) {
@@ -341,7 +537,29 @@ bool sem_allocator_are_the_same(Allocator* allocator1, Allocator* allocator2) {
     return allocator1->variable == allocator2->variable;
 }
 
-bool sem_added_allocator_id_connection(Templated_Function* templated_function, u32 allocator_id1, u32 allocator_id2) {
+bool sem_add_type_allocator_id_connection(Templated_Function* templated_function, Type* type1, Type* type2) {
+    bool res = sem_add_allocator_id_connection(templated_function, type1->base_allocator_id, type2->base_allocator_id);
+    res = res && sem_add_allocator_id_connection(templated_function, type1->ref_allocator_id, type2->ref_allocator_id);
+
+    u64 largest_size = max(type1->ptr_count, type2->ptr_count);
+    u64 smallest_size = min(type1->ptr_count, type2->ptr_count);
+    for (u32 i = largest_size - smallest_size; i < largest_size; i++) {
+        u32 allocator_id1;
+        u32 allocator_id2;
+        if (type1->ptr_count > type2->ptr_count) {
+            allocator_id1 = type1->ptr_allocator_ids[i];
+            allocator_id2 = type2->ptr_allocator_ids[i - largest_size + smallest_size];
+        } else {
+            allocator_id1 = type1->ptr_allocator_ids[i - largest_size + smallest_size];
+            allocator_id2 = type2->ptr_allocator_ids[i];
+        }
+        res = res && sem_add_allocator_id_connection(templated_function, allocator_id1, allocator_id2);
+    }
+
+    return res;
+}
+
+bool sem_add_allocator_id_connection(Templated_Function* templated_function, u32 allocator_id1, u32 allocator_id2) {
     sem_handel_graph_additions_if_needed(templated_function, allocator_id1);
 
     Allocator* allocator1 = sem_allocator_get(templated_function, allocator_id1);
@@ -389,4 +607,72 @@ bool sem_set_allocator(Templated_Function* templated_function, u32 allocator_id,
 Allocator* sem_allocator_get(Templated_Function* templated_function, u32 allocator_id) {
     sem_handel_graph_additions_if_needed(templated_function, allocator_id);
     return &templated_function->allocators.data[allocator_id];
+}
+
+Type sem_copy_type(Type* type) {
+    Type new_type = {0};
+    new_type.base = type->base;
+    new_type.base_allocator_id = type->base_allocator_id;
+    new_type.ref_allocator_id = type->ref_allocator_id;
+    new_type.is_ref = type->is_ref;
+    new_type.ptr_count = type->ptr_count;
+    new_type.ptr_allocator_ids = alloc(sizeof(u32) * type->ptr_count);
+    memcpy(new_type.ptr_allocator_ids, type->ptr_allocator_ids, sizeof(u32) * type->ptr_count);
+    return new_type;
+}
+
+Type sem_dereference_type(Type* type) {
+    Type deref_type = *type;
+    if (type->is_ref) {
+        deref_type.is_ref = false;
+        return deref_type;
+    } else {
+        massert(type->ptr_count > 0, "should have found a pointer");
+        deref_type.is_ref = true;
+        deref_type.ptr_count -= 1;
+        return deref_type;
+    }
+}
+
+Type sem_underlying_type(Type* type) {
+    Type underlying_type = *type;
+    if (type->is_ref) {
+        underlying_type.is_ref = false;
+        return underlying_type;
+    } else {
+        massert(type->ptr_count > 0, "should have found a pointer");
+        underlying_type.ptr_count -= 1;
+        return underlying_type;
+    }
+}
+
+char* sem_type_name(Type* type) {
+    char* base_name = type->base->name;
+    u64 base_name_length = strlen(base_name);
+    u64 added_symbols = type->ptr_count + type->is_ref;
+    char* type_name = alloc(base_name_length + added_symbols + 1);
+    memcpy(type_name, base_name, base_name_length);
+    for (u32 i = 0; i < type->ptr_count; i++) {
+        type_name[base_name_length] = '*';
+        base_name_length += 1;
+    }
+    if (type->is_ref) {
+        type_name[base_name_length] = '&';
+        base_name_length += 1;
+    }
+    type_name[base_name_length] = '\0';
+    return type_name;
+}
+
+bool sem_type_is_equal_without_allocator_id(Type* type1, Type* type2) {
+    bool base_is_equal = type1->base == type2->base;
+    bool ptr_count_is_equal = type1->ptr_count == type2->ptr_count;
+    bool is_ref_is_equal = type1->is_ref == type2->is_ref;
+    return base_is_equal && ptr_count_is_equal && is_ref_is_equal;
+}
+
+Type_Kind sem_get_type_kind(Type* type) {
+    if (type->is_ref) return type_ref;
+    if (type->ptr_count > 0) return type_ptr;
+    return type->base->kind;
 }

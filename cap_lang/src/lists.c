@@ -23,3 +23,9 @@ create_list_impl(Allocator_List, Allocator);
 create_list_impl(u32_List, u32);
 
 create_list_impl(u32_List_List, u32_List);
+
+create_list_impl(Program_Ptr_List, Program*);
+
+create_list_impl(LLVM_Variable_Pair_List, LLVM_Variable_Pair);
+
+create_list_impl(LLVM_Function_Pair_List, LLVM_Function_Pair);

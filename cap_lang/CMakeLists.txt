@@ -18,6 +18,7 @@ add_library(cap_lang
 	src/lists.c
 	src/ast.c
 	src/semantic.c
+	src/llvm.c
 )
 
 

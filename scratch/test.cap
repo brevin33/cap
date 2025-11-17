@@ -1,7 +1,12 @@
 
 
-i32 main(){
+i32 foo(i32 a){
+
+	return 3
+}
+
+program test_program{
 	i32 a = 2
 	i32 b = a
-	return 0
+	return a
 }

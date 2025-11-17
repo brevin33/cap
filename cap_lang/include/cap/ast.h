@@ -18,6 +18,7 @@ typedef enum Ast_Kind {
     ast_int,
     ast_float,
     ast_variable,
+    ast_program,
 } Ast_Kind;
 
 typedef struct Ast Ast;
@@ -48,6 +49,7 @@ typedef struct Ast_Body {
 
 typedef struct Ast_Top_Level {
     Ast_List functions;
+    Ast_List programs;
 } Ast_Top_Level;
 
 typedef struct Ast_Return {
@@ -81,6 +83,11 @@ typedef struct Ast_Float {
     double value;
 } Ast_Float;
 
+typedef struct Ast_Program {
+    char* name;
+    Ast* body;
+} Ast_Program;
+
 typedef struct Ast {
     Ast_Kind kind;
     u32 num_tokens;
@@ -99,6 +106,7 @@ typedef struct Ast {
         Ast_Int int_;
         Ast_Float float_;
         Ast_Variable variable;
+        Ast_Program program;
     };
 } Ast;
 
@@ -143,3 +151,5 @@ Ast ast_int_parse(Token** tokens);
 Ast ast_float_parse(Token** tokens);
 
 Ast ast_variable_parse(Token** tokens);
+
+Ast ast_program_parse(Token** tokens);

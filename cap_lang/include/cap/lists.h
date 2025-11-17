@@ -34,3 +34,12 @@ create_list_headers(Statement_List, Statement);
 create_list_headers(u32_List, u32);
 
 create_list_headers(u32_List_List, u32_List);
+
+typedef struct Program Program;
+create_list_headers(Program_Ptr_List, Program *);
+
+typedef struct LLVM_Variable_Pair LLVM_Variable_Pair;
+create_list_headers(LLVM_Variable_Pair_List, LLVM_Variable_Pair);
+
+typedef struct LLVM_Function_Pair LLVM_Function_Pair;
+create_list_headers(LLVM_Function_Pair_List, LLVM_Function_Pair);

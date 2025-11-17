@@ -6,6 +6,7 @@
 
 typedef struct Project {
     File_Ptr_List files;
+    char* dir_path;
 } Project;
 
 typedef struct File {
@@ -13,6 +14,7 @@ typedef struct File {
     char* contents;
     Token* tokens;
     Function_Ptr_List functions;
+    Program_Ptr_List programs;
     Ast ast;
 } File;
 

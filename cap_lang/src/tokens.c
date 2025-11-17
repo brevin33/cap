@@ -7,6 +7,9 @@ void token_swap_for_keyword(Token *token) {
     if (strcmp(id, "return") == 0) {
         token->type = tt_return;
     }
+    if (strcmp(id, "program") == 0) {
+        token->type = tt_program;
+    }
 }
 
 bool token_is_number_char(char c, bool *is_float) {
@@ -48,6 +51,7 @@ bool token_last_ends_statement_and_endline(Token *token) {
         case tt_rparen:
         case tt_rbracket:
         case tt_return:
+        case tt_program:
             return true;
         case tt_invalid:
         case tt_equals:
@@ -241,6 +245,10 @@ double token_get_float(Token *token) {
 
 void token_print(Token *token) {
     switch (token->type) {
+        case tt_program: {
+            printf("program ");
+            break;
+        }
         case tt_lbrace: {
             printf("{ ");
             break;

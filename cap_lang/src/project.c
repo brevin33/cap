@@ -2,6 +2,8 @@
 
 Project* project_create(const char* dir_path) {
     Project* project = alloc(sizeof(Project));
+    project->dir_path = alloc(strlen(dir_path) + 1);
+    memcpy(project->dir_path, dir_path, strlen(dir_path) + 1);
     Project_Ptr_List_add(&cap_context.projects, &project);
 
     u64 file_in_directory_count = 0;
@@ -84,11 +86,20 @@ void project_semantic_analysis(Project* project) {
 
     for (u64 i = 0; i < project->files.count; i++) {
         File* file = *File_Ptr_List_get(&project->files, i);
+        for (u64 j = 0; j < file->ast.top_level.programs.count; j++) {
+            Ast* ast = &file->ast.top_level.programs.data[j];
+            Program* program = sem_program_parse(ast);
+            Program_Ptr_List_add(&file->programs, &program);
+        }
+    }
+
+    for (u64 i = 0; i < project->files.count; i++) {
+        File* file = *File_Ptr_List_get(&project->files, i);
         for (u64 j = 0; j < file->functions.count; j++) {
             Function* function = *Function_Ptr_List_get(&file->functions, j);
             for (u64 k = 0; k < function->templated_functions.count; k++) {
                 Templated_Function* templated_function = *Templated_Function_Ptr_List_get(&function->templated_functions, k);
-                sem_templated_function_implement(templated_function);
+                sem_templated_function_implement(templated_function, function->ast->function_declaration.body);
             }
         }
     }
@@ -116,8 +127,25 @@ void project_compile_llvm(Project* project) {
         return;
     }
 
-    LLVMTargetMachineRef targetMachine;
-    targetMachine = LLVMCreateTargetMachine(target, triple, "", "", LLVMCodeGenLevelDefault, LLVMRelocDefault, LLVMCodeModelDefault);
+    cap_context.llvm_info.target_machine = LLVMCreateTargetMachine(target, triple, "", "", LLVMCodeGenLevelDefault, LLVMRelocDefault, LLVMCodeModelDefault);
 
-    cap_context.llvm_info.data_layout = LLVMCreateTargetDataLayout(targetMachine);
+    cap_context.llvm_info.data_layout = LLVMCreateTargetDataLayout(cap_context.llvm_info.target_machine);
+
+    for (u64 i = 0; i < project->files.count; i++) {
+        File* file = *File_Ptr_List_get(&project->files, i);
+        for (u64 j = 0; j < file->programs.count; j++) {
+            Program* program = *Program_Ptr_List_get(&file->programs, j);
+            char* build_dir = alloc(8192);
+            snprintf(build_dir, 8192, "%s/build", project->dir_path);
+            delete_directory(build_dir);
+            if (!make_directory(build_dir)) {
+                red_printf("Could not make build directory: %s\n", build_dir);
+            }
+            llvm_compile_program(program, build_dir);
+        }
+    }
+
+    LLVMDisposeBuilder(cap_context.llvm_info.builder);
+    LLVMDisposeModule(cap_context.llvm_info.module);
+    LLVMContextDispose(cap_context.llvm_info.llvm_context);
 }

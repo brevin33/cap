@@ -9,6 +9,8 @@ typedef enum Type_Kind {
     type_uint,
     type_const_int,
     type_const_float,
+    type_ptr,
+    type_ref,
 } Type_Kind;
 
 typedef struct Type_Base {
@@ -22,9 +24,10 @@ typedef struct Type_Base {
 
 typedef struct Type {
     Type_Base* base;
-    u32 base_allocator_id;
     u32* ptr_allocator_ids;
-    u16 ptr_count;
+    u32 ptr_count;
+    u32 base_allocator_id;
+    u32 ref_allocator_id;
     bool is_ref;
 } Type;
 
@@ -40,12 +43,18 @@ typedef struct Variable {
     Ast* ast;
 } Variable;
 
+typedef struct Expression Expression;
 typedef enum Expression_Kind {
     expression_invalid = 0,
     expression_int,
     expression_float,
     expression_variable,
+    expression_cast,
 } Expression_Kind;
+
+typedef struct Expression_Cast {
+    Expression* expression;
+} Expression_Cast;
 
 typedef struct Expression_Int {
     char* value;
@@ -67,6 +76,7 @@ typedef struct Expression {
         Expression_Int int_;
         Expression_Float float_;
         Expression_Variable variable;
+        Expression_Cast cast;
     };
 } Expression;
 
@@ -130,7 +140,9 @@ typedef struct Allocator {
 
 typedef struct Templated_Function {
     Function* function;
+    Type return_type;
     Scope body;
+    Scope parameter_scope;
     u32 allocator_id_counter;
     Allocator_List allocators;
     u32_List_List allocator_id_connections;
@@ -144,13 +156,24 @@ typedef struct Function {
     Templated_Function_Ptr_List templated_functions;
     bool is_prototype;
     bool is_template_function;
+    bool is_program;
 } Function;
+
+typedef struct Program {
+    Ast* ast;
+    char* name;
+    Function body;
+} Program;
+
+Program* sem_program_parse(Ast* ast);
 
 Function* sem_function_prototype(Ast* ast);
 
-void sem_templated_function_implement(Templated_Function* function);
+void sem_templated_function_implement(Templated_Function* function, Ast* scope_ast);
 
-bool sem_added_allocator_id_connection(Templated_Function* templated_function, u32 allocator_id1, u32 allocator_id2);
+bool sem_add_type_allocator_id_connection(Templated_Function* templated_function, Type* type1, Type* type2);
+
+bool sem_add_allocator_id_connection(Templated_Function* templated_function, u32 allocator_id1, u32 allocator_id2);
 
 bool sem_set_allocator(Templated_Function* templated_function, u32 allocator_id, Allocator* allocator);
 
@@ -164,13 +187,19 @@ Type sem_type_get_const_int(u32* allocator_id_counter);
 
 Type sem_type_get_const_float(u32* allocator_id_counter);
 
+Type sem_get_int_type(u32 bit_size, u32* allocator_id_counter);
+
+Type sem_get_uint_type(u32 bit_size, u32* allocator_id_counter);
+
+Type sem_get_float_type(u32 bit_size, u32* allocator_id_counter);
+
 Type_Base* sem_find_type_base(const char* name);
 
 void sem_default_setup_types();
 
 Type_Base* add_number_type_base(u32 number_bit_size, Type_Kind kind);
 
-Variable* sem_scope_add_variable(Scope* scope, Variable* variable);
+Variable* sem_scope_add_variable(Scope* scope, Variable* variable, Templated_Function* templated_function);
 
 Variable* sem_scope_get_variable(Scope* scope, char* name);
 
@@ -193,3 +222,23 @@ Expression sem_expression_variable_parse(Ast* ast, Scope* scope, Templated_Funct
 Expression sem_expression_int_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
 
 Expression sem_expression_float_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Expression sem_expression_cast(Expression* expression, Type* type, Templated_Function* templated_function);
+
+bool sem_can_implicitly_cast(Type* from_type, Type* to_type);
+
+Expression sem_expression_implicit_cast(Expression* expression, Type* type, Templated_Function* templated_function);
+
+char* sem_type_name(Type* type);
+
+Type sem_copy_type(Type* type);
+
+Type sem_dereference_type(Type* type);
+
+Type sem_underlying_type(Type* type);
+
+char* sem_type_name(Type* type);
+
+bool sem_type_is_equal_without_allocator_id(Type* type1, Type* type2);
+
+Type_Kind sem_get_type_kind(Type* type);

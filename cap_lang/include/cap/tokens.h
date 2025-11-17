@@ -21,6 +21,7 @@ typedef enum TokenType {
     tt_equals,
     // keywords
     tt_return,
+    tt_program,
 } TokenType;
 
 typedef struct Token {
