@@ -16,6 +16,17 @@
 
 #include "cap/semantic.h"
 
+typedef struct LLVM_Context {
+    LLVMContextRef llvm_context;
+    LLVMBuilderRef builder;
+    LLVMTargetDataRef data_layout;
+    LLVMModuleRef module;
+    LLVMTargetMachineRef target_machine;
+    LLVM_Function_List llvm_functions;
+} LLVM_Context;
+
+extern LLVM_Context llvm_context;
+
 typedef struct LLVM_Variable_Pair {
     Variable* variable;
     LLVMValueRef value;
@@ -29,15 +40,10 @@ typedef struct LLVM_Scope {
 } LLVM_Scope;
 
 typedef struct LLVM_Function {
-    LLVMTypeRef return_type;
     LLVMValueRef function_value;
+    LLVMTypeRef function_type;
     Templated_Function* templated_function;
 } LLVM_Function;
-
-typedef struct LLVM_Function_Pair {
-    LLVM_Function* function;
-    Templated_Function* templated_function;
-} LLVM_Function_Pair;
 
 LLVMTypeRef llvm_get_type(Type* type);
 
@@ -49,7 +55,7 @@ LLVMValueRef llvm_variable_to_llvm(LLVM_Scope* scope, Variable* variable);
 
 void llvm_store_variable_llvm_value(LLVM_Scope* scope, Variable* variable, LLVMValueRef value);
 
-LLVM_Function llvm_get_function(Templated_Function* templated_function);
+LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Function* function_getting_this);
 
 bool llvm_build_statement(Statement* statement, LLVM_Scope* scope, LLVM_Function* function);
 
@@ -70,6 +76,14 @@ LLVMValueRef llvm_build_expression_float(Expression* expression, LLVM_Scope* sco
 LLVMValueRef llvm_build_expression_variable(Expression* expression, LLVM_Scope* scope, LLVM_Function* function);
 
 LLVMValueRef llvm_build_expression_cast(Expression* expression, LLVM_Scope* scope, LLVM_Function* function);
+
+LLVMValueRef llvm_build_expression_ptr(Expression* expression, LLVM_Scope* scope, LLVM_Function* function);
+
+LLVMValueRef llvm_build_expression_get(Expression* expression, LLVM_Scope* scope, LLVM_Function* function);
+
+LLVMValueRef llvm_build_expression_alloc(Expression* expression, LLVM_Scope* scope, LLVM_Function* function);
+
+LLVMValueRef llvm_build_expression_function_call(Expression* expression, LLVM_Scope* scope, LLVM_Function* function);
 
 char* llvm_evaluate_const_int(Expression* expression);
 

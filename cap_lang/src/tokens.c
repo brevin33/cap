@@ -55,6 +55,7 @@ bool token_last_ends_statement_and_endline(Token *token) {
             return true;
         case tt_invalid:
         case tt_equals:
+        case tt_mul:
         case tt_comma:
         case tt_dot:
         case tt_lbracket:
@@ -174,6 +175,11 @@ Token *tokenize(u32 file_index) {
                 type = tt_equals;
                 break;
             }
+            case '*': {
+                i++;
+                type = tt_mul;
+                break;
+            }
             default: {
                 log_error(file_index, start_char, i, "invalid token");
                 i++;
@@ -247,6 +253,10 @@ void token_print(Token *token) {
     switch (token->type) {
         case tt_program: {
             printf("program ");
+            break;
+        }
+        case tt_mul: {
+            printf("* ");
             break;
         }
         case tt_lbrace: {

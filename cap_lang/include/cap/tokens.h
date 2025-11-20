@@ -19,6 +19,7 @@ typedef enum TokenType {
     tt_comma,
     tt_dot,
     tt_equals,
+    tt_mul,
     // keywords
     tt_return,
     tt_program,

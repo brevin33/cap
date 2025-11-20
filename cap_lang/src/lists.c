@@ -28,4 +28,6 @@ create_list_impl(Program_Ptr_List, Program*);
 
 create_list_impl(LLVM_Variable_Pair_List, LLVM_Variable_Pair);
 
-create_list_impl(LLVM_Function_Pair_List, LLVM_Function_Pair);
+create_list_impl(LLVM_Function_List, LLVM_Function);
+
+create_list_impl(Expression_List, Expression);

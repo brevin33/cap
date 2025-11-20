@@ -27,5 +27,6 @@ int main(int argc, char** argv) {
     green_printf("\nDone compiling llvm\n");
 
     DEBUGBREAK();
+
     return 0;
 }

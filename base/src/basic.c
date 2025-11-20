@@ -29,11 +29,53 @@ void red_printf(const char* message, ...) {
     printf("\x1b[0m");
 }
 
+void yellow_printf(const char* format, ...) {
+    printf("\x1b[33m");
+    va_list args;
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+    printf("\x1b[0m");
+}
+
+void blue_printf(const char* format, ...) {
+    printf("\x1b[34m");
+    va_list args;
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+    printf("\x1b[0m");
+}
+
 void green_printf(const char* message, ...) {
     printf("\x1b[32m");
     va_list args;
     va_start(args, message);
     vprintf(message, args);
+    printf("\x1b[0m");
+}
+
+void rainbow_printf(const char* format, ...) {
+    const char* colors[] = {
+        "\033[31m",  // Red
+        "\033[33m",  // Yellow
+        "\033[32m",  // Green
+        "\033[36m",  // Cyan
+        "\033[34m",  // Blue
+        "\033[35m",  // Magenta
+        "\033[91m",  // Bright Red
+    };
+    const int color_count = sizeof(colors) / sizeof(colors[0]);
+
+    char text[512 * 8];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(text, sizeof(text), format, args);
+    va_end(args);
+
+    for (int i = 0; text[i] != '\0'; ++i) {
+        printf("%s%c", colors[i % color_count], text[i]);
+    }
     printf("\x1b[0m");
 }
 

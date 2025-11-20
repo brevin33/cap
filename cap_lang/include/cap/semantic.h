@@ -43,14 +43,35 @@ typedef struct Variable {
     Ast* ast;
 } Variable;
 
-typedef struct Expression Expression;
 typedef enum Expression_Kind {
     expression_invalid = 0,
     expression_int,
     expression_float,
     expression_variable,
     expression_cast,
+    expression_ptr,
+    expression_get,
+    expression_alloc,
+    expression_function_call,
 } Expression_Kind;
+
+typedef struct Expression_Function_Call {
+    Expression_List parameters;
+    Templated_Function* templated_function;
+} Expression_Function_Call;
+
+typedef struct Expression_Alloc {
+    Type type;
+    Expression* count;
+} Expression_Alloc;
+
+typedef struct Expression_Ptr {
+    Expression* expression;
+} Expression_Ptr;
+
+typedef struct Expression_Get {
+    Expression* expression;
+} Expression_Get;
 
 typedef struct Expression_Cast {
     Expression* expression;
@@ -77,6 +98,10 @@ typedef struct Expression {
         Expression_Float float_;
         Expression_Variable variable;
         Expression_Cast cast;
+        Expression_Ptr ptr;
+        Expression_Get val;
+        Expression_Alloc alloc;
+        Expression_Function_Call function_call;
     };
 } Expression;
 
@@ -215,6 +240,8 @@ Statement sem_statement_expression_parse(Ast* ast, Scope* scope, Templated_Funct
 
 Statement sem_statement_variable_declaration_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
 
+Expression sem_expression_alloc_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
 Expression sem_expression_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
 
 Expression sem_expression_variable_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
@@ -223,7 +250,17 @@ Expression sem_expression_int_parse(Ast* ast, Scope* scope, Templated_Function* 
 
 Expression sem_expression_float_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
 
+Expression sem_expression_value_access_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Expression sem_expression_ptr_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Expression sem_expression_val_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
 Expression sem_expression_cast(Expression* expression, Type* type, Templated_Function* templated_function);
+
+Expression sem_expression_function_call_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Expression sem_function_call(char* name, Expression_List* parameters, Ast* ast);
 
 bool sem_can_implicitly_cast(Type* from_type, Type* to_type);
 
@@ -236,6 +273,8 @@ Type sem_copy_type(Type* type);
 Type sem_dereference_type(Type* type);
 
 Type sem_underlying_type(Type* type);
+
+Type sem_ptr_of_ref(Type* type);
 
 char* sem_type_name(Type* type);
 

@@ -19,13 +19,32 @@ typedef enum Ast_Kind {
     ast_float,
     ast_variable,
     ast_program,
+    ast_value_access,
+    ast_alloc,
+    ast_function_call,
+    ast_function_call_parameter,
 } Ast_Kind;
 
 typedef struct Ast Ast;
 
+typedef struct Ast_Alloc {
+    Ast* type;
+    Ast* count;
+} Ast_Alloc;
+
 typedef struct Ast_Type {
     char* name;
+    u64 ptr_count;
 } Ast_Type;
+
+typedef struct Ast_Function_Call {
+    char* name;
+    Ast* parameters;
+} Ast_Function_Call;
+
+typedef struct Ast_Function_Call_Parameter {
+    Ast_List parameters;
+} Ast_Function_Call_Parameter;
 
 typedef struct Ast_Function_Declaration {
     Ast* return_type;
@@ -88,6 +107,11 @@ typedef struct Ast_Program {
     Ast* body;
 } Ast_Program;
 
+typedef struct Ast_Value_Access {
+    Ast* expr;
+    char* access_name;
+} Ast_Value_Access;
+
 typedef struct Ast {
     Ast_Kind kind;
     u32 num_tokens;
@@ -107,6 +131,10 @@ typedef struct Ast {
         Ast_Float float_;
         Ast_Variable variable;
         Ast_Program program;
+        Ast_Value_Access value_access;
+        Ast_Alloc alloc;
+        Ast_Function_Call function_call;
+        Ast_Function_Call_Parameter function_call_parameter;
     };
 } Ast;
 
@@ -119,6 +147,8 @@ bool ast_can_interpret_as_type(Token** tokens);
 bool ast_interpret_as_function_declaration(Token* token);
 
 bool ast_interpret_as_variable_declaration(Token* token);
+
+bool ast_interpret_ast_assignment(Token* token);
 
 // ------
 
@@ -153,3 +183,11 @@ Ast ast_float_parse(Token** tokens);
 Ast ast_variable_parse(Token** tokens);
 
 Ast ast_program_parse(Token** tokens);
+
+Ast ast_value_access_parse(Token** tokens, Ast* lhs);
+
+Ast ast_alloc_parse(Token** tokens);
+
+Ast ast_function_call_parse(Token** tokens);
+
+Ast ast_function_call_parameter_parse(Token** tokens);

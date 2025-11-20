@@ -74,6 +74,10 @@ u32 file_get_front_of_line(File* file, u32 line) {
 }
 
 void project_semantic_analysis(Project* project) {
+    if (cap_context.error_count > 0) {
+        red_printf("can't continue with semantic analysis because of errors\n");
+        return;
+    }
     sem_default_setup_types();
     for (u64 i = 0; i < project->files.count; i++) {
         File* file = *File_Ptr_List_get(&project->files, i);
@@ -106,6 +110,10 @@ void project_semantic_analysis(Project* project) {
 }
 
 void project_compile_llvm(Project* project) {
+    if (cap_context.error_count > 0) {
+        red_printf("can't continue with llvm compilation because of errors\n");
+        return;
+    }
     // compilation starts
     LLVMInitializeAllAsmParsers();
     LLVMInitializeAllTargetInfos();
@@ -115,9 +123,8 @@ void project_compile_llvm(Project* project) {
     LLVMInitializeAllDisassemblers();
     char* triple = LLVMGetDefaultTargetTriple();
 
-    cap_context.llvm_info.llvm_context = LLVMContextCreate();
-    cap_context.llvm_info.module = LLVMModuleCreateWithName("cap");
-    cap_context.llvm_info.builder = LLVMCreateBuilder();
+    llvm_context.llvm_context = LLVMContextCreate();
+    llvm_context.builder = LLVMCreateBuilder();
 
     char* error;
     LLVMTargetRef target;
@@ -127,9 +134,9 @@ void project_compile_llvm(Project* project) {
         return;
     }
 
-    cap_context.llvm_info.target_machine = LLVMCreateTargetMachine(target, triple, "", "", LLVMCodeGenLevelDefault, LLVMRelocDefault, LLVMCodeModelDefault);
+    llvm_context.target_machine = LLVMCreateTargetMachine(target, triple, "", "", LLVMCodeGenLevelDefault, LLVMRelocDefault, LLVMCodeModelDefault);
 
-    cap_context.llvm_info.data_layout = LLVMCreateTargetDataLayout(cap_context.llvm_info.target_machine);
+    llvm_context.data_layout = LLVMCreateTargetDataLayout(llvm_context.target_machine);
 
     for (u64 i = 0; i < project->files.count; i++) {
         File* file = *File_Ptr_List_get(&project->files, i);
@@ -145,7 +152,6 @@ void project_compile_llvm(Project* project) {
         }
     }
 
-    LLVMDisposeBuilder(cap_context.llvm_info.builder);
-    LLVMDisposeModule(cap_context.llvm_info.module);
-    LLVMContextDispose(cap_context.llvm_info.llvm_context);
+    LLVMDisposeBuilder(llvm_context.builder);
+    LLVMContextDispose(llvm_context.llvm_context);
 }

@@ -1,12 +1,8 @@
-
-
-i32 foo(i32 a){
-
-	return 3
+i32 foo(){
+	return 67
 }
 
 program test_program{
-	i32 a = 2
-	i32 b = a
-	return a
+	return foo()
 }
+

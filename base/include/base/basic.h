@@ -49,6 +49,12 @@ void red_printf(const char* format, ...);
 
 void green_printf(const char* format, ...);
 
+void yellow_printf(const char* format, ...);
+
+void blue_printf(const char* format, ...);
+
+void rainbow_printf(const char* format, ...);
+
 void* alloc(size_t size);
 
 char* read_file(const char* path);
