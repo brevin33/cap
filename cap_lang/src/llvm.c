@@ -33,6 +33,10 @@ LLVMTypeRef llvm_get_type(Type* type) {
             }
         case type_uint:
             return LLVMIntType(type->base->number_bit_size);
+        case type_void:
+            return LLVMVoidType();
+        case type_type:
+            return NULL;
         case type_const_int:
         case type_const_float:
             return NULL;
@@ -44,6 +48,24 @@ LLVMTypeRef llvm_get_type(Type* type) {
             massert(false, "should have a valid type");
             return NULL;
     }
+}
+
+void llvm_setup_program_context() {
+    llvm_context.module = LLVMModuleCreateWithName("cap");
+
+    LLVM_Function malloc_function = {0};
+    LLVMTypeRef return_type = LLVMPointerType(LLVMIntType(8), 0);
+    LLVMTypeRef param_types[] = {LLVMIntType(64)};
+    LLVMTypeRef malloc_type = LLVMFunctionType(return_type, param_types, 1, 0);
+    LLVMValueRef malloc_func = LLVMAddFunction(llvm_context.module, "malloc", malloc_type);
+    malloc_function.function_value = malloc_func;
+    malloc_function.function_type = malloc_type;
+    malloc_function.templated_function = NULL;
+    llvm_context.malloc_function = malloc_function;
+}
+void llvm_cleanup_program_context() {
+    llvm_context.llvm_functions.count = 0;
+    LLVMDisposeModule(llvm_context.module);
 }
 
 LLVMValueRef llvm_variable_to_llvm(LLVM_Scope* scope, Variable* variable) {
@@ -140,11 +162,18 @@ LLVMValueRef llvm_build_expression(Expression* expression, LLVM_Scope* scope, LL
         case expression_get: {
             return llvm_build_expression_get(expression, scope, function);
         }
+        case expression_type: {
+            return llvm_build_expression_type(expression, scope, function);
+        }
         case expression_invalid: {
             massert(false, "should never happen");
             break;
         }
     }
+}
+
+LLVMValueRef llvm_build_expression_type(Expression* expression, LLVM_Scope* scope, LLVM_Function* function) {
+    return NULL;
 }
 
 LLVMValueRef llvm_build_expression_function_call(Expression* expression, LLVM_Scope* scope, LLVM_Function* function) {
@@ -158,28 +187,53 @@ LLVMValueRef llvm_build_expression_function_call(Expression* expression, LLVM_Sc
 
     Templated_Function* templated_function = expression->function_call.templated_function;
     LLVM_Function* llvm_function = llvm_get_function(templated_function, function);
+
     LLVMValueRef return_value = LLVMBuildCall2(llvm_context.builder, llvm_function->function_type, llvm_function->function_value, parameter_values, expression->function_call.parameters.count, "");
     return return_value;
 }
 
 LLVMValueRef llvm_build_expression_alloc(Expression* expression, LLVM_Scope* scope, LLVM_Function* function) {
     massert(expression->kind == expression_alloc, "should have found an alloc");
-    Type* type_to_alloc = &expression->alloc.type;
-    LLVMTypeRef llvm_type = llvm_get_type(type_to_alloc);
-    u64 size_in_bytes = LLVMABISizeOfType(llvm_context.data_layout, llvm_type);
-    LLVMValueRef size_in_bytes_value = LLVMConstInt(LLVMInt64Type(), size_in_bytes, false);
+    LLVMValueRef size_in_bytes_value;
+    LLVMValueRef alignment_value;
+    LLVMTypeRef llvm_type;
 
-    int alignment = LLVMABIAlignmentOfType(llvm_context.data_layout, llvm_type);
-    LLVMValueRef alignment_value = LLVMConstInt(LLVMInt32Type(), alignment, true);
-
-    if (expression->alloc.count != NULL) {
-        Expression* count_expression = expression->alloc.count;
-        LLVMValueRef count_value = llvm_build_expression(count_expression, scope, function);
-        size_in_bytes_value = LLVMBuildMul(llvm_context.builder, size_in_bytes_value, count_value, "size_in_bytes");
+    if (expression->alloc.is_type_alloc) {
+        Type* type_to_alloc = &expression->alloc.type_or_count->expression_type.type;
+        llvm_type = llvm_get_type(type_to_alloc);
+        u64 size_in_bytes = LLVMABISizeOfType(llvm_context.data_layout, llvm_type);
+        size_in_bytes_value = LLVMConstInt(LLVMInt64Type(), size_in_bytes, false);
+        int alignment = LLVMABIAlignmentOfType(llvm_context.data_layout, llvm_type);
+        alignment_value = LLVMConstInt(LLVMInt32Type(), alignment, true);
+        if (expression->alloc.count_or_allignment != NULL) {
+            Expression* count_expression = expression->alloc.count_or_allignment;
+            LLVMValueRef count_value = llvm_build_expression(count_expression, scope, function);
+            size_in_bytes_value = LLVMBuildMul(llvm_context.builder, size_in_bytes_value, count_value, "size_in_bytes");
+        }
+    } else {
+        size_in_bytes_value = llvm_build_expression(expression->alloc.type_or_count, scope, function);
+        alignment_value = llvm_build_expression(expression->alloc.count_or_allignment, scope, function);
     }
 
-    // TODO: fix
-    return size_in_bytes_value;
+    massert(expression->type.ptr_count > 0, "should have found a pointer");
+    u32 expression_allocator_id = expression->type.ptr_allocator_ids[expression->type.ptr_count - 1];
+    Allocator* allocator = sem_allocator_get(function->templated_function, expression_allocator_id);
+    massert(!sem_allocator_are_the_same(allocator, &LOOSE_ALLOCATOR), "should not have found a loose allocator");
+    if (sem_allocator_are_the_same(allocator, &STACK_ALLOCATOR)) {
+        if (expression->alloc.is_type_alloc) {
+            return LLVMBuildAlloca(llvm_context.builder, llvm_type, "stack_alloc");
+        } else {
+            LLVMTypeRef i8_llvm = LLVMIntType(8);
+            return LLVMBuildArrayAlloca(llvm_context.builder, i8_llvm, size_in_bytes_value, "stack_alloc");
+        }
+    }
+    if (sem_allocator_are_the_same(allocator, &UNDEFINED_ALLOCATOR)) {
+        return LLVMBuildCall2(llvm_context.builder, llvm_context.malloc_function.function_type, llvm_context.malloc_function.function_value, &size_in_bytes_value, 1, "");
+    }
+
+    (void)alignment_value;
+    massert(false, "not implemented");
+    return NULL;
 }
 
 LLVMValueRef llvm_build_expression_ptr(Expression* expression, LLVM_Scope* scope, LLVM_Function* function) {
@@ -421,7 +475,10 @@ LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Fu
     function.templated_function = templated_function;
     function.function_value = function_value;
     function.function_type = function_type;
-
+    if (templated_function->body.ast == NULL) {
+        LLVM_Function_List_add(&llvm_context.llvm_functions, &function);
+        return LLVM_Function_List_get(&llvm_context.llvm_functions, llvm_context.llvm_functions.count - 1);
+    }
     LLVMBasicBlockRef return_after_building_function_block = LLVMAppendBasicBlock(function_getting_this->function_value, "return_after_building_function");
     LLVMBuildBr(llvm_context.builder, return_after_building_function_block);
 
@@ -458,7 +515,7 @@ LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Fu
 }
 
 void llvm_compile_program(Program* program, char* build_dir) {
-    llvm_context.module = LLVMModuleCreateWithName("cap");
+    llvm_setup_program_context();
 
     LLVMTypeRef llvm_return_type = llvm_get_type(&program->body.return_type);
     LLVMTypeRef function_type = LLVMFunctionType(llvm_return_type, NULL, 0, false);
@@ -522,7 +579,7 @@ void llvm_compile_program(Program* program, char* build_dir) {
         rainbow_printf("Program exited with code: %d\n", res);
     }
 
-    LLVMDisposeModule(llvm_context.module);
+    llvm_cleanup_program_context();
 }
 
 char* llvm_evaluate_const_int(Expression* expression) {
@@ -538,6 +595,7 @@ char* llvm_evaluate_const_int(Expression* expression) {
             sprintf(value_str, "%lld", value_i64);
             return value_str;
         }
+        case expression_type:
         case expression_function_call:
         case expression_alloc:
         case expression_get:
@@ -562,6 +620,7 @@ double llvm_evaluate_const_float(Expression* expression) {
         case expression_float: {
             return expression->float_.value;
         }
+        case expression_type:
         case expression_function_call:
         case expression_alloc:
         case expression_variable:

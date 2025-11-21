@@ -23,14 +23,37 @@ typedef enum Ast_Kind {
     ast_alloc,
     ast_function_call,
     ast_function_call_parameter,
+    ast_add,
+    ast_sub,
+    ast_mul,
+    ast_div,
+    ast_mod,
+    ast_bit_and,
+    ast_bit_or,
+    ast_bit_xor,
+    ast_bit_not,
+    ast_bit_shl,
+    ast_bit_shr,
+    ast_and,
+    ast_or,
+    ast_equals_equals,
+    ast_not_equals,
+    ast_less_than,
+    ast_greater_than,
+    ast_less_than_equals,
+    ast_greater_than_equals,
 } Ast_Kind;
 
 typedef struct Ast Ast;
 
 typedef struct Ast_Alloc {
-    Ast* type;
-    Ast* count;
+    Ast* parameters;
 } Ast_Alloc;
+
+typedef struct Ast_Biop {
+    Ast* lhs;
+    Ast* rhs;
+} Ast_Biop;
 
 typedef struct Ast_Type {
     char* name;
@@ -135,6 +158,7 @@ typedef struct Ast {
         Ast_Alloc alloc;
         Ast_Function_Call function_call;
         Ast_Function_Call_Parameter function_call_parameter;
+        Ast_Biop biop;
     };
 } Ast;
 
@@ -150,6 +174,7 @@ bool ast_interpret_as_variable_declaration(Token* token);
 
 bool ast_interpret_ast_assignment(Token* token);
 
+u32 ast_token_precedence(TokenType type);
 // ------
 
 Ast ast_general_parse(Token** tokens);

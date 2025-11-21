@@ -53,6 +53,24 @@ bool token_last_ends_statement_and_endline(Token *token) {
         case tt_return:
         case tt_program:
             return true;
+        case tt_add:
+        case tt_sub:
+        case tt_div:
+        case tt_mod:
+        case tt_bit_and:
+        case tt_bit_or:
+        case tt_bit_xor:
+        case tt_bit_not:
+        case tt_bit_shl:
+        case tt_bit_shr:
+        case tt_and:
+        case tt_or:
+        case tt_equals_equals:
+        case tt_not_equals:
+        case tt_less_than:
+        case tt_greater_than:
+        case tt_less_than_equals:
+        case tt_greater_than_equals:
         case tt_invalid:
         case tt_equals:
         case tt_mul:
@@ -172,12 +190,98 @@ Token *tokenize(u32 file_index) {
             }
             case '=': {
                 i++;
-                type = tt_equals;
+                if (input[i] == '=') {
+                    i++;
+                    type = tt_equals_equals;
+                } else {
+                    type = tt_equals;
+                }
                 break;
             }
             case '*': {
                 i++;
                 type = tt_mul;
+                break;
+            }
+            case '+': {
+                i++;
+                type = tt_add;
+                break;
+            }
+            case '-': {
+                i++;
+                type = tt_sub;
+                break;
+            }
+            case '/': {
+                i++;
+                type = tt_div;
+                break;
+            }
+            case '%': {
+                i++;
+                type = tt_mod;
+                break;
+            }
+            case '&': {
+                i++;
+                if (input[i] == '&') {
+                    i++;
+                    type = tt_and;
+                } else {
+                    type = tt_bit_and;
+                }
+                break;
+            }
+            case '|': {
+                i++;
+                if (input[i] == '|') {
+                    i++;
+                    type = tt_or;
+                } else {
+                    type = tt_bit_or;
+                }
+                break;
+            }
+            case '^': {
+                i++;
+                type = tt_bit_xor;
+                break;
+            }
+            case '!': {
+                i++;
+                if (input[i] == '=') {
+                    i++;
+                    type = tt_not_equals;
+                } else {
+                    type = tt_bit_not;
+                }
+                break;
+            }
+            case '<': {
+                i++;
+                if (input[i] == '<') {
+                    i++;
+                    type = tt_bit_shl;
+                } else if (input[i] == '=') {
+                    i++;
+                    type = tt_less_than_equals;
+                } else {
+                    type = tt_less_than;
+                }
+                break;
+            }
+            case '>': {
+                i++;
+                if (input[i] == '>') {
+                    i++;
+                    type = tt_bit_shr;
+                } else if (input[i] == '=') {
+                    i++;
+                    type = tt_greater_than_equals;
+                } else {
+                    type = tt_greater_than;
+                }
                 break;
             }
             default: {
@@ -253,6 +357,78 @@ void token_print(Token *token) {
     switch (token->type) {
         case tt_program: {
             printf("program ");
+            break;
+        }
+        case tt_add: {
+            printf("+ ");
+            break;
+        }
+        case tt_sub: {
+            printf("- ");
+            break;
+        }
+        case tt_div: {
+            printf("/ ");
+            break;
+        }
+        case tt_mod: {
+            puts("% ");
+            break;
+        }
+        case tt_bit_and: {
+            printf("& ");
+            break;
+        }
+        case tt_bit_or: {
+            printf("| ");
+            break;
+        }
+        case tt_bit_xor: {
+            printf("^ ");
+            break;
+        }
+        case tt_bit_not: {
+            printf("! ");
+            break;
+        }
+        case tt_bit_shl: {
+            printf("<< ");
+            break;
+        }
+        case tt_bit_shr: {
+            printf(">> ");
+            break;
+        }
+        case tt_and: {
+            printf("&& ");
+            break;
+        }
+        case tt_or: {
+            printf("|| ");
+            break;
+        }
+        case tt_equals_equals: {
+            printf("== ");
+            break;
+        }
+        case tt_not_equals: {
+            printf("!= ");
+            break;
+        }
+        case tt_less_than: {
+            printf("< ");
+            break;
+        }
+        case tt_greater_than: {
+            printf("> ");
+            break;
+        }
+        case tt_less_than_equals: {
+            printf("<= ");
+            break;
+        }
+        case tt_greater_than_equals: {
+            printf(">= ");
             break;
         }
         case tt_mul: {

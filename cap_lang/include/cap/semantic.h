@@ -11,6 +11,8 @@ typedef enum Type_Kind {
     type_const_float,
     type_ptr,
     type_ref,
+    type_void,
+    type_type,
 } Type_Kind;
 
 typedef struct Type_Base {
@@ -53,6 +55,7 @@ typedef enum Expression_Kind {
     expression_get,
     expression_alloc,
     expression_function_call,
+    expression_type,
 } Expression_Kind;
 
 typedef struct Expression_Function_Call {
@@ -60,9 +63,14 @@ typedef struct Expression_Function_Call {
     Templated_Function* templated_function;
 } Expression_Function_Call;
 
-typedef struct Expression_Alloc {
+typedef struct Expression_Type {
     Type type;
-    Expression* count;
+} Expression_Type;
+
+typedef struct Expression_Alloc {
+    Expression* type_or_count;
+    Expression* count_or_allignment;
+    bool is_type_alloc;
 } Expression_Alloc;
 
 typedef struct Expression_Ptr {
@@ -102,6 +110,7 @@ typedef struct Expression {
         Expression_Get val;
         Expression_Alloc alloc;
         Expression_Function_Call function_call;
+        Expression_Type expression_type;
     };
 } Expression;
 
@@ -212,6 +221,10 @@ Type sem_type_get_const_int(u32* allocator_id_counter);
 
 Type sem_type_get_const_float(u32* allocator_id_counter);
 
+Type sem_type_get_void(u32* allocator_id_counter);
+
+Type sem_type_get_type(u32* allocator_id_counter);
+
 Type sem_get_int_type(u32 bit_size, u32* allocator_id_counter);
 
 Type sem_get_uint_type(u32 bit_size, u32* allocator_id_counter);
@@ -254,13 +267,15 @@ Expression sem_expression_value_access_parse(Ast* ast, Scope* scope, Templated_F
 
 Expression sem_expression_ptr_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
 
+Expression sem_expression_type_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
 Expression sem_expression_val_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
 
 Expression sem_expression_cast(Expression* expression, Type* type, Templated_Function* templated_function);
 
 Expression sem_expression_function_call_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
 
-Expression sem_function_call(char* name, Expression_List* parameters, Ast* ast);
+Expression sem_function_call(char* name, Expression_List* parameters, Ast* ast, Templated_Function* calling_templated_function);
 
 bool sem_can_implicitly_cast(Type* from_type, Type* to_type);
 
@@ -275,6 +290,8 @@ Type sem_dereference_type(Type* type);
 Type sem_underlying_type(Type* type);
 
 Type sem_ptr_of_ref(Type* type);
+
+Type sem_pointer_of_type(Type* type, u32* allocator_id_counter);
 
 char* sem_type_name(Type* type);
 

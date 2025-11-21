@@ -313,7 +313,14 @@ Ast ast_expression_value_parse(Token** tokens) {
             if (token->type == tt_lparen) {
                 return ast_function_call_parse(tokens);
             }
-            return ast_variable_parse(tokens);
+            Token* pre_call_token = token;
+            bool can_pasre_as_type = ast_can_interpret_as_type(&token);
+            if (!can_pasre_as_type) return ast_variable_parse(tokens);
+            u32 tokens_passed = token - pre_call_token;
+            if (tokens_passed == 1) return ast_variable_parse(tokens);
+            u32 precedence = ast_token_precedence(token->type);
+            if (precedence != UINT32_MAX) return ast_variable_parse(tokens);
+            return ast_type_parse(tokens);
         }
         default: {
             log_error_token(token, "expected token parsable av expression value");
@@ -376,13 +383,93 @@ Ast ast_value_access_parse(Token** tokens, Ast* lhs) {
     return ast;
 }
 
-Ast ast_expression_parse(Token** tokens, TokenType* delimiters, u32 num_delimiters) {
+u32 ast_token_precedence(TokenType type) {
+    switch (type) {
+        case tt_mul:
+        case tt_div:
+        case tt_mod:
+            return 3;
+        case tt_add:
+        case tt_sub:
+            return 4;
+        case tt_bit_shl:
+        case tt_bit_shr:
+            return 5;
+        case tt_less_than:
+        case tt_greater_than:
+        case tt_less_than_equals:
+        case tt_greater_than_equals:
+            return 6;
+        case tt_equals_equals:
+        case tt_not_equals:
+            return 7;
+        case tt_bit_and:
+            return 8;
+        case tt_bit_xor:
+            return 9;
+        case tt_bit_or:
+            return 10;
+        case tt_and:
+            return 11;
+        case tt_or:
+            return 12;
+        case tt_dot:
+            return 20;
+        default:
+            return UINT32_MAX;
+    }
+}
+
+Ast_Kind ast_get_biop_kind(TokenType type) {
+    switch (type) {
+        case tt_add:
+            return ast_add;
+        case tt_sub:
+            return ast_sub;
+        case tt_mul:
+            return ast_mul;
+        case tt_div:
+            return ast_div;
+        case tt_mod:
+            return ast_mod;
+        case tt_bit_and:
+            return ast_bit_and;
+        case tt_bit_or:
+            return ast_bit_or;
+        case tt_bit_xor:
+            return ast_bit_xor;
+        case tt_bit_not:
+            return ast_bit_not;
+        case tt_bit_shl:
+            return ast_bit_shl;
+        case tt_bit_shr:
+            return ast_bit_shr;
+        case tt_and:
+            return ast_and;
+        case tt_or:
+            return ast_or;
+        case tt_equals_equals:
+            return ast_equals_equals;
+        case tt_not_equals:
+            return ast_not_equals;
+        case tt_less_than:
+            return ast_less_than;
+        case tt_greater_than:
+            return ast_greater_than;
+        case tt_less_than_equals:
+            return ast_less_than_equals;
+        case tt_greater_than_equals:
+            return ast_greater_than_equals;
+        default:
+            massert(false, "should never happen");
+            return ast_invalid;
+    }
+}
+
+Ast _ast_expression_parse(Token** tokens, TokenType* delimiters, u32 num_delimiters, u32 precedence) {
     Token* token = *tokens;
     Ast err = {0};
-    Ast ast = {0};
-    ast.token_start = token;
-    ast.kind = ast_expression;
-
+    Token* start_token = token;
     Ast lhs = ast_expression_value_parse(&token);
     while (true) {
         bool found_delimiter = false;
@@ -394,17 +481,51 @@ Ast ast_expression_parse(Token** tokens, TokenType* delimiters, u32 num_delimite
         }
         if (found_delimiter) break;
 
+        u32 op_precedence = ast_token_precedence(token->type);
+        if (op_precedence == UINT32_MAX) {
+            log_error_token(token, "expected binary operator");
+            return err;
+        }
+        if (op_precedence >= precedence) break;
+
+        // special cases
         if (token->type == tt_dot) {
             lhs = ast_value_access_parse(&token, &lhs);
             continue;
         }
 
-        // TODO: biops and order of operations
-        massert(false, "not implemented");
+        Ast rhs = _ast_expression_parse(&token, delimiters, num_delimiters, op_precedence);
+        Ast_Kind biop_kind = ast_get_biop_kind(token->type);
+
+        Ast biop = {0};
+        biop.kind = biop_kind;
+
+        biop.biop.lhs = alloc(sizeof(Ast));
+        *biop.biop.lhs = lhs;
+
+        biop.biop.rhs = alloc(sizeof(Ast));
+        *biop.biop.rhs = rhs;
+
+        lhs = biop;
     }
 
+    lhs.token_start = start_token;
+    lhs.num_tokens = token - start_token;
+    *tokens = token;
+    return lhs;
+}
+
+Ast ast_expression_parse(Token** tokens, TokenType* delimiters, u32 num_delimiters) {
+    Token* token = *tokens;
+    Ast ast = {0};
+    ast.token_start = token;
+    ast.kind = ast_expression;
+
+    Ast expr = _ast_expression_parse(&token, delimiters, num_delimiters, UINT32_MAX - 1);
+    if (expr.kind == ast_invalid) return expr;
     ast.expression.value = alloc(sizeof(Ast));
-    *ast.expression.value = lhs;
+    *ast.expression.value = expr;
+
     ast.num_tokens = token - *tokens;
     *tokens = token;
     return ast;
@@ -660,37 +781,10 @@ Ast ast_alloc_parse(Token** tokens) {
     massert(strcmp(token_get_id(token), "alloc") == 0, "should have found an alloc");
     token++;
 
-    if (token->type != tt_lparen) {
-        log_error_token(token, "expected '(' for alloc");
-        return err;
-    }
-    token++;
-
-    Ast type = ast_type_parse(&token);
-    if (type.kind == ast_invalid) return type;
-    ast.alloc.type = alloc(sizeof(Ast));
-    *ast.alloc.type = type;
-
-    if (token->type == tt_comma) {
-        token++;
-        TokenType delimiters[] = {tt_rparen, tt_comma};
-        Ast count = ast_expression_parse(&token, delimiters, arr_length(delimiters));
-        if (count.kind == ast_invalid) return count;
-        if (token->type == tt_comma) {
-            log_error_token(token, "alloc should only take at most 2 parameters");
-            return err;
-        }
-        ast.alloc.count = alloc(sizeof(Ast));
-        *ast.alloc.count = count;
-    } else {
-        ast.alloc.count = NULL;
-    }
-
-    if (token->type != tt_rparen) {
-        log_error_token(token, "expected closing ')' for alloc");
-        return err;
-    }
-    token++;
+    Ast parameter_list = ast_function_call_parameter_parse(&token);
+    if (parameter_list.kind == ast_invalid) return parameter_list;
+    ast.alloc.parameters = alloc(sizeof(Ast));
+    *ast.alloc.parameters = parameter_list;
 
     ast.num_tokens = token - *tokens;
     *tokens = token;

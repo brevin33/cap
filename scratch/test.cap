@@ -1,8 +1,7 @@
-i32 foo(){
-	return 67
-}
 
 program test_program{
-	return foo()
+	i32* ptr = alloc(i32)
+	ptr.get = 10
+	return ptr.get
 }
 
