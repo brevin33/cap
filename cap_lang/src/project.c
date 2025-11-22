@@ -1,6 +1,8 @@
 #include "cap.h"
 
 Project* project_create(const char* dir_path) {
+    init_cap_context();
+
     Project* project = alloc(sizeof(Project));
     project->dir_path = alloc(strlen(dir_path) + 1);
     memcpy(project->dir_path, dir_path, strlen(dir_path) + 1);

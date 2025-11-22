@@ -52,12 +52,14 @@ bool token_last_ends_statement_and_endline(Token *token) {
         case tt_rbracket:
         case tt_return:
         case tt_program:
+        case tt_mul:
+        case tt_bit_and:
             return true;
+        case tt_at:
         case tt_add:
         case tt_sub:
         case tt_div:
         case tt_mod:
-        case tt_bit_and:
         case tt_bit_or:
         case tt_bit_xor:
         case tt_bit_not:
@@ -73,7 +75,6 @@ bool token_last_ends_statement_and_endline(Token *token) {
         case tt_greater_than_equals:
         case tt_invalid:
         case tt_equals:
-        case tt_mul:
         case tt_comma:
         case tt_dot:
         case tt_lbracket:
@@ -181,6 +182,11 @@ Token *tokenize(u32 file_index) {
             case ';': {
                 i++;
                 type = tt_end_statement;
+                break;
+            }
+            case '@': {
+                i++;
+                type = tt_at;
                 break;
             }
             case ',': {
@@ -355,6 +361,10 @@ double token_get_float(Token *token) {
 
 void token_print(Token *token) {
     switch (token->type) {
+        case tt_at: {
+            printf("@ ");
+            break;
+        }
         case tt_program: {
             printf("program ");
             break;

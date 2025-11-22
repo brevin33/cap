@@ -81,6 +81,8 @@ bool link_obj_to_exe(const char* obj_path, const char* exe_path);
 
 bool make_directory(const char* path);
 
+bool is_power_of_two(u64 number);
+
 #define CASE_NUMBER \
     case '0':       \
     case '1':       \

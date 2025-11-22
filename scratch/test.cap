@@ -1,7 +1,12 @@
 
+
+i32 foo(){
+	return 10
+}
+
 program test_program{
-	i32* ptr = alloc(i32)
-	ptr.get = 10
-	return ptr.get
+	i32*@stack ptr = alloc(i32*.size, i32*.align)
+	ptr* = 10
+	return ptr*
 }
 

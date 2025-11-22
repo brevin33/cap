@@ -1,6 +1,35 @@
 #include "cap.h"
 #include "cap/tokens.h"
 
+bool ast_can_interpret_as_allocator(Token** tokens) {
+    Token* token = *tokens;
+    if (token->type != tt_at) return false;
+    token++;
+    if (token->type != tt_id) return false;
+    token++;
+    if (token->type == tt_dot) {
+        token++;
+        if (token->type != tt_id && token->type != tt_int) return false;
+        token++;
+    }
+    *tokens = token;
+    return true;
+}
+
+bool ast_can_interpret_as_type_with_allocator(Token** tokens) {
+    Token* token = *tokens;
+    Token* token_start = token;
+    bool res = ast_can_interpret_as_type(&token);
+    Token* t = token_start;
+    bool found_allocator = false;
+    while (t != token) {
+        if (t->type == tt_at) found_allocator = true;
+        t++;
+    }
+    *tokens = token;
+    return res && found_allocator;
+}
+
 bool ast_can_interpret_as_type(Token** token_start) {
     Token* token = *token_start;
     if (token->type != tt_id) return false;
@@ -9,6 +38,7 @@ bool ast_can_interpret_as_type(Token** token_start) {
     while (true) {
         if (token->type == tt_mul) {
             token++;
+            ast_can_interpret_as_allocator(&token);
             continue;
         }
         break;
@@ -126,9 +156,22 @@ Ast ast_type_parse(Token** tokens) {
     ast.type.name = token_get_id(token);
     token++;
 
+    cap_context.log_errors = false;
+    Ast allocator = ast_allocator_parse(&token);
+    ast.type.base_allocator = alloc(sizeof(Ast));
+    *ast.type.base_allocator = allocator;
+    cap_context.log_errors = true;
+
     while (true) {
         if (token->type == tt_mul) {
             token++;
+
+            // we ignore the error here because an allocator doesn't have to be specified
+            cap_context.log_errors = false;
+            Ast allocator = ast_allocator_parse(&token);
+            Ast_List_add(&ast.type.ptr_allocators, &allocator);
+            cap_context.log_errors = true;
+
             ast.type.ptr_count++;
             continue;
         }
@@ -295,8 +338,9 @@ Ast ast_variable_parse(Token** tokens) {
     return ast;
 }
 
-Ast ast_expression_value_parse(Token** tokens) {
+Ast ast_expression_value_parse(Token** tokens, TokenType* delimiters, u32 num_delimiters) {
     Token* token = *tokens;
+    Token* token_start = token;
     switch (token->type) {
         case tt_int: {
             return ast_int_parse(tokens);
@@ -313,17 +357,12 @@ Ast ast_expression_value_parse(Token** tokens) {
             if (token->type == tt_lparen) {
                 return ast_function_call_parse(tokens);
             }
-            Token* pre_call_token = token;
-            bool can_pasre_as_type = ast_can_interpret_as_type(&token);
-            if (!can_pasre_as_type) return ast_variable_parse(tokens);
-            u32 tokens_passed = token - pre_call_token;
-            if (tokens_passed == 1) return ast_variable_parse(tokens);
-            u32 precedence = ast_token_precedence(token->type);
-            if (precedence != UINT32_MAX) return ast_variable_parse(tokens);
-            return ast_type_parse(tokens);
+
+            if (ast_can_interpret_as_type_with_allocator(&token_start)) return ast_type_parse(tokens);
+            return ast_variable_parse(tokens);
         }
         default: {
-            log_error_token(token, "expected token parsable av expression value");
+            log_error_token(token, "expected token parsable as expression value");
             Ast err = {0};
             return err;
         }
@@ -354,6 +393,42 @@ Ast ast_return_parse(Token** tokens) {
         return err;
     }
 
+    ast.num_tokens = token - ast.token_start;
+    *tokens = token;
+    return ast;
+}
+
+Ast ast_get_parse(Token** tokens, Ast* lhs) {
+    Token* token = *tokens;
+    Ast err = {0};
+    Ast ast = {0};
+    ast.token_start = lhs->token_start;
+    ast.kind = ast_get;
+    ast.get.expression = alloc(sizeof(Ast));
+    *ast.get.expression = *lhs;
+    if (token->type != tt_mul) {
+        log_error_token(token, "expected '*' for get");
+        return err;
+    }
+    token++;
+    ast.num_tokens = token - ast.token_start;
+    *tokens = token;
+    return ast;
+}
+
+Ast ast_ptr_parse(Token** tokens, Ast* lhs) {
+    Token* token = *tokens;
+    Ast err = {0};
+    Ast ast = {0};
+    ast.token_start = lhs->token_start;
+    ast.kind = ast_ptr;
+    ast.ptr.expression = alloc(sizeof(Ast));
+    *ast.ptr.expression = *lhs;
+    if (token->type != tt_bit_and) {
+        log_error_token(token, "expected '&' for ptr");
+        return err;
+    }
+    token++;
     ast.num_tokens = token - ast.token_start;
     *tokens = token;
     return ast;
@@ -470,7 +545,7 @@ Ast _ast_expression_parse(Token** tokens, TokenType* delimiters, u32 num_delimit
     Token* token = *tokens;
     Ast err = {0};
     Token* start_token = token;
-    Ast lhs = ast_expression_value_parse(&token);
+    Ast lhs = ast_expression_value_parse(&token, delimiters, num_delimiters);
     while (true) {
         bool found_delimiter = false;
         for (u32 i = 0; i < num_delimiters; i++) {
@@ -493,6 +568,39 @@ Ast _ast_expression_parse(Token** tokens, TokenType* delimiters, u32 num_delimit
             lhs = ast_value_access_parse(&token, &lhs);
             continue;
         }
+        if (token->type == tt_mul) {
+            Token* next_token = token + 1;
+            bool found_delimiter = false;
+            for (u32 i = 0; i < num_delimiters; i++) {
+                if (next_token->type == delimiters[i]) {
+                    found_delimiter = true;
+                    break;
+                }
+            }
+            u32 next_token_precedence = ast_token_precedence(next_token->type);
+            if (next_token_precedence != UINT32_MAX || found_delimiter) {
+                lhs = ast_get_parse(&token, &lhs);
+                if (lhs.kind == ast_invalid) return lhs;
+                continue;
+            }
+        }
+        if (token->type == tt_bit_and) {
+            Token* next_token = token + 1;
+            bool found_delimiter = false;
+            for (u32 i = 0; i < num_delimiters; i++) {
+                if (next_token->type == delimiters[i]) {
+                    found_delimiter = true;
+                    break;
+                }
+            }
+            u32 next_token_precedence = ast_token_precedence(next_token->type);
+            if (next_token_precedence != UINT32_MAX || found_delimiter) {
+                lhs = ast_ptr_parse(&token, &lhs);
+                if (lhs.kind == ast_invalid) return lhs;
+                continue;
+            }
+        }
+        token++;
 
         Ast rhs = _ast_expression_parse(&token, delimiters, num_delimiters, op_precedence);
         Ast_Kind biop_kind = ast_get_biop_kind(token->type);
@@ -725,6 +833,43 @@ Ast ast_function_call_parse(Token** tokens) {
     ast.function_call.parameters = alloc(sizeof(Ast));
     *ast.function_call.parameters = ast_function_call_parameter_parse(&token);
     if (ast.function_call.parameters->kind == ast_invalid) return ast;
+
+    ast.num_tokens = token - *tokens;
+    *tokens = token;
+    return ast;
+}
+
+Ast ast_allocator_parse(Token** tokens) {
+    Token* token = *tokens;
+    Ast err = {0};
+    Ast ast = {0};
+    ast.token_start = token;
+    ast.kind = ast_allocator;
+
+    if (token->type != tt_at) {
+        log_error_token(token, "expected allocator");
+        return err;
+    }
+    token++;
+
+    if (token->type != tt_id) {
+        log_error_token(token, "expected allocator name");
+        return err;
+    }
+    ast.allocator.variable_name = token_get_id(token);
+    token++;
+
+    if (token->type == tt_dot) {
+        token++;
+        if (token->type != tt_id && token->type != tt_int) {
+            log_error_token(token, "expected field name");
+            return err;
+        }
+        ast.allocator.field_name = token_get_id(token);
+        token++;
+    } else {
+        ast.allocator.field_name = NULL;
+    }
 
     ast.num_tokens = token - *tokens;
     *tokens = token;

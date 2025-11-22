@@ -38,6 +38,7 @@ typedef enum TokenType {
     tt_greater_than,
     tt_less_than_equals,
     tt_greater_than_equals,
+    tt_at,
     // keywords
     tt_return,
     tt_program,

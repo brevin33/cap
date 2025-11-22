@@ -91,6 +91,10 @@ LLVMValueRef llvm_build_expression_function_call(Expression* expression, LLVM_Sc
 
 LLVMValueRef llvm_build_expression_type(Expression* expression, LLVM_Scope* scope, LLVM_Function* function);
 
+LLVMValueRef llvm_build_expression_type_size(Expression* expression, LLVM_Scope* scope, LLVM_Function* function);
+
+LLVMValueRef llvm_build_expression_type_align(Expression* expression, LLVM_Scope* scope, LLVM_Function* function);
+
 char* llvm_evaluate_const_int(Expression* expression);
 
 double llvm_evaluate_const_float(Expression* expression);

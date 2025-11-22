@@ -13,9 +13,12 @@ typedef struct Cap_Context {
     Type_Base_Ptr_List types;
     Function_Ptr_List functions;
     u64 error_count;
+    bool log_errors;
 } Cap_Context;
 
 extern Cap_Context cap_context;
+
+void init_cap_context();
 
 Project *project_create(const char *dir_path);
 

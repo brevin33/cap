@@ -20,6 +20,8 @@ typedef enum Ast_Kind {
     ast_variable,
     ast_program,
     ast_value_access,
+    ast_get,
+    ast_ptr,
     ast_alloc,
     ast_function_call,
     ast_function_call_parameter,
@@ -42,6 +44,7 @@ typedef enum Ast_Kind {
     ast_greater_than,
     ast_less_than_equals,
     ast_greater_than_equals,
+    ast_allocator,
 } Ast_Kind;
 
 typedef struct Ast Ast;
@@ -55,9 +58,24 @@ typedef struct Ast_Biop {
     Ast* rhs;
 } Ast_Biop;
 
+typedef struct Ast_Get {
+    Ast* expression;
+} Ast_Get;
+
+typedef struct Ast_Ptr {
+    Ast* expression;
+} Ast_Ptr;
+
+typedef struct Ast_Allocator {
+    char* variable_name;
+    char* field_name;
+} Ast_Allocator;
+
 typedef struct Ast_Type {
     char* name;
     u64 ptr_count;
+    Ast* base_allocator;
+    Ast_List ptr_allocators;
 } Ast_Type;
 
 typedef struct Ast_Function_Call {
@@ -159,6 +177,9 @@ typedef struct Ast {
         Ast_Function_Call function_call;
         Ast_Function_Call_Parameter function_call_parameter;
         Ast_Biop biop;
+        Ast_Allocator allocator;
+        Ast_Get get;
+        Ast_Ptr ptr;
     };
 } Ast;
 
@@ -166,7 +187,11 @@ Ast ast_from_tokens(Token* token_start);
 
 // ------
 
+bool ast_can_interpret_as_allocator(Token** tokens);
+
 bool ast_can_interpret_as_type(Token** tokens);
+
+bool ast_can_interpret_as_type_with_allocator(Token** tokens);
 
 bool ast_interpret_as_function_declaration(Token* token);
 
@@ -199,7 +224,7 @@ Ast ast_return_parse(Token** tokens);
 
 Ast ast_expression_parse(Token** tokens, TokenType* delimiters, u32 num_delimiters);
 
-Ast ast_expression_value_parse(Token** tokens);
+Ast ast_expression_value_parse(Token** tokens, TokenType* delimiters, u32 num_delimiters);
 
 Ast ast_int_parse(Token** tokens);
 
@@ -216,3 +241,9 @@ Ast ast_alloc_parse(Token** tokens);
 Ast ast_function_call_parse(Token** tokens);
 
 Ast ast_function_call_parameter_parse(Token** tokens);
+
+Ast ast_allocator_parse(Token** tokens);
+
+Ast ast_get_parse(Token** tokens, Ast* lhs);
+
+Ast ast_ptr_parse(Token** tokens, Ast* lhs);

@@ -56,6 +56,8 @@ typedef enum Expression_Kind {
     expression_alloc,
     expression_function_call,
     expression_type,
+    expression_type_size,
+    expression_type_align,
 } Expression_Kind;
 
 typedef struct Expression_Function_Call {
@@ -72,6 +74,14 @@ typedef struct Expression_Alloc {
     Expression* count_or_allignment;
     bool is_type_alloc;
 } Expression_Alloc;
+
+typedef struct Expression_Type_Size {
+    Type type;
+} Expression_Type_Size;
+
+typedef struct Expression_Type_Align {
+    Type type;
+} Expression_Type_Align;
 
 typedef struct Expression_Ptr {
     Expression* expression;
@@ -107,10 +117,12 @@ typedef struct Expression {
         Expression_Variable variable;
         Expression_Cast cast;
         Expression_Ptr ptr;
-        Expression_Get val;
+        Expression_Get get;
         Expression_Alloc alloc;
         Expression_Function_Call function_call;
         Expression_Type expression_type;
+        Expression_Type_Size type_size;
+        Expression_Type_Align type_align;
     };
 } Expression;
 
@@ -172,6 +184,9 @@ typedef struct Allocator {
 #define LOOSE_ALLOCATOR \
     (Allocator){.variable = (Variable*)2}
 
+#define INVALID_ALLOCATOR \
+    (Allocator){.variable = (Variable*)3}
+
 typedef struct Templated_Function {
     Function* function;
     Type return_type;
@@ -215,7 +230,9 @@ Allocator* sem_allocator_get(Templated_Function* templated_function, u32 allocat
 
 bool sem_allocator_are_the_same(Allocator* allocator1, Allocator* allocator2);
 
-Type sem_type_parse(Ast* ast, u32* allocator_id_counter);
+Allocator sem_allocator_parse(Ast* ast, Scope* scope);
+
+Type sem_type_parse(Ast* ast, Templated_Function* templated_function, Scope* scope, u32* allocator_id_counter);
 
 Type sem_type_get_const_int(u32* allocator_id_counter);
 
@@ -269,11 +286,15 @@ Expression sem_expression_ptr_parse(Ast* ast, Scope* scope, Templated_Function* 
 
 Expression sem_expression_type_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
 
-Expression sem_expression_val_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+Expression sem_expression_get_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
 
 Expression sem_expression_cast(Expression* expression, Type* type, Templated_Function* templated_function);
 
 Expression sem_expression_function_call_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
+
+Expression sem_expression_type_size_parse(Ast* ast, Scope* scope, Templated_Function* templated_function, Expression* type);
+
+Expression sem_expression_type_align_parse(Ast* ast, Scope* scope, Templated_Function* templated_function, Expression* type);
 
 Expression sem_function_call(char* name, Expression_List* parameters, Ast* ast, Templated_Function* calling_templated_function);
 

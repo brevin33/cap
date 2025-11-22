@@ -10,7 +10,7 @@ LLVMTypeRef llvm_get_type(Type* type) {
         type->ptr_count -= 1;
         LLVMTypeRef ptr_type = llvm_get_type(type);
         type->ptr_count += 1;
-        return LLVMPointerType(ptr_type, type->ptr_count);
+        return LLVMPointerType(ptr_type, 0);
     }
     if (type->is_ref) {
         type->is_ref = false;
@@ -165,6 +165,12 @@ LLVMValueRef llvm_build_expression(Expression* expression, LLVM_Scope* scope, LL
         case expression_type: {
             return llvm_build_expression_type(expression, scope, function);
         }
+        case expression_type_size: {
+            return llvm_build_expression_type_size(expression, scope, function);
+        }
+        case expression_type_align: {
+            return llvm_build_expression_type_align(expression, scope, function);
+        }
         case expression_invalid: {
             massert(false, "should never happen");
             break;
@@ -173,6 +179,14 @@ LLVMValueRef llvm_build_expression(Expression* expression, LLVM_Scope* scope, LL
 }
 
 LLVMValueRef llvm_build_expression_type(Expression* expression, LLVM_Scope* scope, LLVM_Function* function) {
+    return NULL;
+}
+
+LLVMValueRef llvm_build_expression_type_size(Expression* expression, LLVM_Scope* scope, LLVM_Function* function) {
+    return NULL;
+}
+
+LLVMValueRef llvm_build_expression_type_align(Expression* expression, LLVM_Scope* scope, LLVM_Function* function) {
     return NULL;
 }
 
@@ -197,6 +211,11 @@ LLVMValueRef llvm_build_expression_alloc(Expression* expression, LLVM_Scope* sco
     LLVMValueRef size_in_bytes_value;
     LLVMValueRef alignment_value;
     LLVMTypeRef llvm_type;
+    LLVMValueRef count_value = NULL;
+
+    massert(expression->type.ptr_count > 0, "should have found a pointer");
+    u32 expression_allocator_id = expression->type.ptr_allocator_ids[expression->type.ptr_count - 1];
+    Allocator* allocator = sem_allocator_get(function->templated_function, expression_allocator_id);
 
     if (expression->alloc.is_type_alloc) {
         Type* type_to_alloc = &expression->alloc.type_or_count->expression_type.type;
@@ -207,7 +226,7 @@ LLVMValueRef llvm_build_expression_alloc(Expression* expression, LLVM_Scope* sco
         alignment_value = LLVMConstInt(LLVMInt32Type(), alignment, true);
         if (expression->alloc.count_or_allignment != NULL) {
             Expression* count_expression = expression->alloc.count_or_allignment;
-            LLVMValueRef count_value = llvm_build_expression(count_expression, scope, function);
+            count_value = llvm_build_expression(count_expression, scope, function);
             size_in_bytes_value = LLVMBuildMul(llvm_context.builder, size_in_bytes_value, count_value, "size_in_bytes");
         }
     } else {
@@ -215,16 +234,31 @@ LLVMValueRef llvm_build_expression_alloc(Expression* expression, LLVM_Scope* sco
         alignment_value = llvm_build_expression(expression->alloc.count_or_allignment, scope, function);
     }
 
-    massert(expression->type.ptr_count > 0, "should have found a pointer");
-    u32 expression_allocator_id = expression->type.ptr_allocator_ids[expression->type.ptr_count - 1];
-    Allocator* allocator = sem_allocator_get(function->templated_function, expression_allocator_id);
     massert(!sem_allocator_are_the_same(allocator, &LOOSE_ALLOCATOR), "should not have found a loose allocator");
     if (sem_allocator_are_the_same(allocator, &STACK_ALLOCATOR)) {
         if (expression->alloc.is_type_alloc) {
-            return LLVMBuildAlloca(llvm_context.builder, llvm_type, "stack_alloc");
+            if (count_value != NULL) {
+                return LLVMBuildArrayAlloca(llvm_context.builder, llvm_type, count_value, "stack_alloc");
+            } else {
+                return LLVMBuildAlloca(llvm_context.builder, llvm_type, "stack_alloc");
+            }
         } else {
             LLVMTypeRef i8_llvm = LLVMIntType(8);
-            return LLVMBuildArrayAlloca(llvm_context.builder, i8_llvm, size_in_bytes_value, "stack_alloc");
+            LLVMValueRef alignment_value_u64 = LLVMBuildZExt(llvm_context.builder, alignment_value, LLVMIntType(64), "");
+            LLVMValueRef size_plus_align = LLVMBuildAdd(
+                llvm_context.builder,
+                size_in_bytes_value,
+                LLVMBuildSub(llvm_context.builder, alignment_value_u64, LLVMConstInt(LLVMIntType(64), 1, 0), ""),
+                "");
+            LLVMValueRef raw_alloc = LLVMBuildArrayAlloca(llvm_context.builder, i8_llvm, size_plus_align, "stack_alloc_raw");
+            // Compute aligned pointer: (raw_ptr + (alignment - 1)) & ~(alignment - 1)
+            LLVMValueRef raw_ptr_int = LLVMBuildPtrToInt(llvm_context.builder, raw_alloc, LLVMIntType(64), "");
+            LLVMValueRef align_minus_1 = LLVMBuildSub(llvm_context.builder, alignment_value_u64, LLVMConstInt(LLVMIntType(64), 1, 0), "");
+            LLVMValueRef add = LLVMBuildAdd(llvm_context.builder, raw_ptr_int, align_minus_1, "");
+            LLVMValueRef mask = LLVMBuildNot(llvm_context.builder, align_minus_1, "");
+            LLVMValueRef aligned_ptr_int = LLVMBuildAnd(llvm_context.builder, add, mask, "");
+            LLVMValueRef aligned_alloc = LLVMBuildIntToPtr(llvm_context.builder, aligned_ptr_int, LLVMPointerType(i8_llvm, 0), "stack_alloc");
+            return aligned_alloc;
         }
     }
     if (sem_allocator_are_the_same(allocator, &UNDEFINED_ALLOCATOR)) {
@@ -246,12 +280,8 @@ LLVMValueRef llvm_build_expression_ptr(Expression* expression, LLVM_Scope* scope
 LLVMValueRef llvm_build_expression_get(Expression* expression, LLVM_Scope* scope, LLVM_Function* function) {
     massert(expression->kind == expression_get, "should have found a get");
     Type* expr_type = &expression->type;
-    Expression* underlying_expression = expression->val.expression;
+    Expression* underlying_expression = expression->get.expression;
     LLVMValueRef underlying_value = llvm_build_expression(underlying_expression, scope, function);
-    if (expr_type->is_ref) {
-        LLVMTypeRef llvm_expr_type = llvm_get_type(expr_type);
-        return LLVMBuildLoad2(llvm_context.builder, llvm_expr_type, underlying_value, "");
-    }
     return underlying_value;
 }
 
@@ -272,7 +302,9 @@ LLVMValueRef llvm_build_expression_cast(Expression* expression, LLVM_Scope* scop
         return deref_value;
     }
 
-    if (from_type.base->kind == type_int && to_type.base->kind == type_int) {
+    Type_Kind from_kind = sem_get_type_kind(&from_type);
+    Type_Kind to_kind = sem_get_type_kind(&to_type);
+    if (from_kind == type_int && to_kind == type_int) {
         u64 from_bit_size = from_type.base->number_bit_size;
         u64 to_bit_size = to_type.base->number_bit_size;
         if (from_bit_size < to_bit_size) {
@@ -287,7 +319,7 @@ LLVMValueRef llvm_build_expression_cast(Expression* expression, LLVM_Scope* scop
         return from_value;
     }
 
-    if (from_type.base->kind == type_uint && to_type.base->kind == type_uint) {
+    if (from_kind == type_uint && to_kind == type_uint) {
         u64 from_bit_size = from_type.base->number_bit_size;
         u64 to_bit_size = to_type.base->number_bit_size;
         if (from_bit_size < to_bit_size) {
@@ -302,7 +334,7 @@ LLVMValueRef llvm_build_expression_cast(Expression* expression, LLVM_Scope* scop
         return from_value;
     }
 
-    if (from_type.base->kind == type_float && to_type.base->kind == type_float) {
+    if (from_kind == type_float && to_kind == type_float) {
         LLVMTypeRef from_llvm_type = llvm_get_type(&from_type);
         LLVMTypeRef to_llvm_type = llvm_get_type(&to_type);
         u64 from_bit_size = from_type.base->number_bit_size;
@@ -316,7 +348,7 @@ LLVMValueRef llvm_build_expression_cast(Expression* expression, LLVM_Scope* scop
         return from_value;
     }
 
-    if (from_type.base->kind == type_int && to_type.base->kind == type_uint) {
+    if (from_kind == type_int && to_kind == type_uint) {
         u64 from_bit_size = from_type.base->number_bit_size;
         u64 to_bit_size = to_type.base->number_bit_size;
         if (from_bit_size < to_bit_size) {
@@ -331,7 +363,7 @@ LLVMValueRef llvm_build_expression_cast(Expression* expression, LLVM_Scope* scop
         return from_value;
     }
 
-    if (from_type.base->kind == type_uint && to_type.base->kind == type_int) {
+    if (from_kind == type_uint && to_kind == type_int) {
         u64 from_bit_size = from_type.base->number_bit_size;
         u64 to_bit_size = to_type.base->number_bit_size;
         if (from_bit_size < to_bit_size) {
@@ -346,54 +378,59 @@ LLVMValueRef llvm_build_expression_cast(Expression* expression, LLVM_Scope* scop
         return from_value;
     }
 
-    if (from_type.base->kind == type_int && to_type.base->kind == type_float) {
+    if (from_kind == type_int && to_kind == type_float) {
         LLVMTypeRef to_type_llvm_type = llvm_get_type(&to_type);
         LLVMValueRef cast_value = LLVMBuildSIToFP(llvm_context.builder, from_value, to_type_llvm_type, "");
         return cast_value;
     }
 
-    if (from_type.base->kind == type_uint && to_type.base->kind == type_float) {
+    if (from_kind == type_uint && to_kind == type_float) {
         LLVMTypeRef to_type_llvm_type = llvm_get_type(&to_type);
         LLVMValueRef cast_value = LLVMBuildUIToFP(llvm_context.builder, from_value, to_type_llvm_type, "");
         return cast_value;
     }
 
-    if (from_type.base->kind == type_const_int && to_type.base->kind == type_int) {
+    if (from_kind == type_const_int && to_kind == type_int) {
         char* value = llvm_evaluate_const_int(from_expression);
         LLVMTypeRef to_type_llvm_type = llvm_get_type(&to_type);
         return LLVMConstIntOfString(to_type_llvm_type, value, 10);
     }
 
-    if (from_type.base->kind == type_const_int && to_type.base->kind == type_uint) {
+    if (from_kind == type_const_int && to_kind == type_uint) {
         char* value = llvm_evaluate_const_int(from_expression);
         LLVMTypeRef to_type_llvm_type = llvm_get_type(&to_type);
         return LLVMConstIntOfString(to_type_llvm_type, value, 10);
     }
 
-    if (from_type.base->kind == type_const_int && to_type.base->kind == type_float) {
+    if (from_kind == type_const_int && to_kind == type_float) {
         char* value = llvm_evaluate_const_int(from_expression);
         LLVMTypeRef to_type_llvm_type = llvm_get_type(&to_type);
         return LLVMConstRealOfString(to_type_llvm_type, value);
     }
 
-    if (from_type.base->kind == type_const_float && to_type.base->kind == type_float) {
+    if (from_kind == type_const_float && to_kind == type_float) {
         double value = llvm_evaluate_const_float(from_expression);
         LLVMTypeRef to_type_llvm_type = llvm_get_type(&to_type);
         return LLVMConstReal(to_type_llvm_type, value);
     }
 
-    if (from_type.base->kind == type_const_float && to_type.base->kind == type_int) {
+    if (from_kind == type_const_float && to_kind == type_int) {
         LLVMTypeRef to_type_llvm_type = llvm_get_type(&to_type);
         double value = llvm_evaluate_const_float(from_expression);
         i64 value_i64 = (i64)value;
         return LLVMConstInt(to_type_llvm_type, value_i64, true);
     }
 
-    if (from_type.base->kind == type_const_float && to_type.base->kind == type_uint) {
+    if (from_kind == type_const_float && to_kind == type_uint) {
         LLVMTypeRef to_type_llvm_type = llvm_get_type(&to_type);
         double value = llvm_evaluate_const_float(from_expression);
         u64 value_u64 = (u64)value;
         return LLVMConstInt(to_type_llvm_type, value_u64, false);
+    }
+
+    if (from_kind == type_ptr && to_kind == type_ptr) {
+        LLVMTypeRef to_type_llvm_type = llvm_get_type(&to_type);
+        return from_value;
     }
 
     massert(false, "should have found a valid cast");
@@ -595,6 +632,24 @@ char* llvm_evaluate_const_int(Expression* expression) {
             sprintf(value_str, "%lld", value_i64);
             return value_str;
         }
+        case expression_type_size: {
+            Type* type = &expression->type_size.type;
+            LLVMTypeRef llvm_type = llvm_get_type(type);
+            u64 size_in_bytes = LLVMABISizeOfType(llvm_context.data_layout, llvm_type);
+            u64 number_of_digits = get_number_of_digits(size_in_bytes);
+            char* value_str = alloc(number_of_digits + 2);
+            sprintf(value_str, "%lld", size_in_bytes);
+            return value_str;
+        }
+        case expression_type_align: {
+            Type* type = &expression->type_align.type;
+            LLVMTypeRef llvm_type = llvm_get_type(type);
+            u64 alignment = LLVMABIAlignmentOfType(llvm_context.data_layout, llvm_type);
+            u64 number_of_digits = get_number_of_digits(alignment);
+            char* value_str = alloc(number_of_digits + 2);
+            sprintf(value_str, "%lld", alignment);
+            return value_str;
+        }
         case expression_type:
         case expression_function_call:
         case expression_alloc:
@@ -619,6 +674,18 @@ double llvm_evaluate_const_float(Expression* expression) {
         }
         case expression_float: {
             return expression->float_.value;
+        }
+        case expression_type_size: {
+            Type* type = &expression->type_size.type;
+            LLVMTypeRef llvm_type = llvm_get_type(type);
+            u64 size_in_bytes = LLVMABISizeOfType(llvm_context.data_layout, llvm_type);
+            return (double)size_in_bytes;
+        }
+        case expression_type_align: {
+            Type* type = &expression->type_align.type;
+            LLVMTypeRef llvm_type = llvm_get_type(type);
+            u64 alignment = LLVMABIAlignmentOfType(llvm_context.data_layout, llvm_type);
+            return (double)alignment;
         }
         case expression_type:
         case expression_function_call:

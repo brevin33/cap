@@ -2,7 +2,7 @@
 
 void log_error_ast(Ast *ast, const char *format, ...) {
     Token start_token = *ast->token_start;
-    Token end_token = *ast->token_start;
+    Token end_token = *(ast->token_start + ast->num_tokens - 1);
     va_list args;
     va_start(args, format);
     log_error_va_list(start_token.file_index, start_token.start_char, end_token.end_char, format, 0, args);
@@ -24,9 +24,11 @@ void log_error(u32 file_id, u32 start_char, u32 end_char, const char *format, ..
 }
 
 void log_info_ast(Ast *ast, const char *format, ...) {
+    Token start_token = *ast->token_start;
+    Token end_token = *(ast->token_start + ast->num_tokens - 1);
     va_list args;
     va_start(args, format);
-    log_error_va_list(ast->token_start->file_index, ast->token_start->start_char, ast->token_start->end_char, format, 1, args);
+    log_error_va_list(start_token.file_index, start_token.start_char, end_token.end_char, format, 1, args);
     va_end(args);
 }
 
@@ -45,9 +47,11 @@ void log_info(Ast *ast, const char *format, ...) {
 }
 
 void log_warning_ast(Ast *ast, const char *format, ...) {
+    Token start_token = *ast->token_start;
+    Token end_token = *(ast->token_start + ast->num_tokens - 1);
     va_list args;
     va_start(args, format);
-    log_error_va_list(ast->token_start->file_index, ast->token_start->start_char, ast->token_start->end_char, format, 2, args);
+    log_error_va_list(start_token.file_index, start_token.start_char, end_token.end_char, format, 1, args);
     va_end(args);
 }
 
@@ -66,6 +70,7 @@ void log_warning(u32 file_id, u32 start_char, u32 end_char, const char *format, 
 }
 
 void log_error_va_list(u32 file_id, u32 start_char, u32 end_char, const char *format, u32 type, va_list args) {
+    if (!cap_context.log_errors) return;
     if (type == 0) cap_context.error_count++;
     File *file = *File_Ptr_List_get(&cap_context.files, file_id);
 
@@ -116,7 +121,7 @@ void log_error_va_list(u32 file_id, u32 start_char, u32 end_char, const char *fo
                 index++;
                 continue;
             }
-            bool in_range = index >= start_char && index <= end_char;
+            bool in_range = index >= start_char && index < end_char;
             if (in_range) {
                 printf("^");
             } else {
@@ -124,7 +129,7 @@ void log_error_va_list(u32 file_id, u32 start_char, u32 end_char, const char *fo
             }
             index++;
         }
-        bool in_range = index >= start_char && index <= end_char;
+        bool in_range = index >= start_char && index < end_char;
         if (in_range) {
             printf("^");
         }
