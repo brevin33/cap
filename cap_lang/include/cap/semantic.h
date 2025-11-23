@@ -173,19 +173,26 @@ typedef struct Scope {
 
 typedef struct Allocator {
     Variable* variable;
+    bool used_for_alloc_or_free;
+    bool is_function_value;
 } Allocator;
 
-#define UNDEFINED_ALLOCATOR \
-    (Allocator) { .variable = NULL }
+#define UNSPECIFIED_ALLOCATOR \
+    (Allocator) { .variable = NULL, .used_for_alloc_or_free = false, .is_function_value = false }
 
 #define STACK_ALLOCATOR \
-    (Allocator){.variable = (Variable*)1}
+    (Allocator) { .variable = (Variable*)1, .used_for_alloc_or_free = false, .is_function_value = false }
 
-#define LOOSE_ALLOCATOR \
-    (Allocator){.variable = (Variable*)2}
+// #define LOOSE_ALLOCATOR \
+//     (Allocator) { .variable = (Variable*)2, .used_for_alloc_or_free = false, .is_function_value = false }
 
 #define INVALID_ALLOCATOR \
-    (Allocator){.variable = (Variable*)3}
+    (Allocator) { .variable = (Variable*)2, .used_for_alloc_or_free = false, .is_function_value = false }
+
+typedef struct Allocator_Connection_Map {
+    Allocator_List allocators;
+    u32_List_List allocator_id_connections;
+} Allocator_Connection_Map;
 
 typedef struct Templated_Function {
     Function* function;
@@ -193,8 +200,7 @@ typedef struct Templated_Function {
     Scope body;
     Scope parameter_scope;
     u32 allocator_id_counter;
-    Allocator_List allocators;
-    u32_List_List allocator_id_connections;
+    Allocator_Connection_Map allocator_connection_map;
 } Templated_Function;
 
 typedef struct Function {
@@ -220,15 +226,19 @@ Function* sem_function_prototype(Ast* ast);
 
 void sem_templated_function_implement(Templated_Function* function, Ast* scope_ast);
 
-bool sem_add_type_allocator_id_connection(Templated_Function* templated_function, Type* type1, Type* type2);
+// bool sem_add_type_allocator_id_connection(Templated_Function* templated_function, Type* type1, Type* type2);
 
-bool sem_add_allocator_id_connection(Templated_Function* templated_function, u32 allocator_id1, u32 allocator_id2);
+void sem_mark_type_as_function_value(Templated_Function* templated_function, Type* type, bool is_return_value);
 
-bool sem_set_allocator(Templated_Function* templated_function, u32 allocator_id, Allocator* allocator);
+bool sem_add_allocator_id_connection(Allocator_Connection_Map* map, u32 allocator_id1, u32 allocator_id2, Ast* ast);
 
-Allocator* sem_allocator_get(Templated_Function* templated_function, u32 allocator_id);
+void sem_set_allocator(Allocator_Connection_Map* map, u32 allocator_id, Allocator* allocator);
+
+Allocator* sem_allocator_get(Allocator_Connection_Map* map, u32 allocator_id);
 
 bool sem_allocator_are_the_same(Allocator* allocator1, Allocator* allocator2);
+
+bool sem_allocator_are_exactly_the_same(Allocator* allocator1, Allocator* allocator2);
 
 Allocator sem_allocator_parse(Ast* ast, Scope* scope);
 
@@ -290,6 +300,8 @@ Expression sem_expression_get_parse(Ast* ast, Scope* scope, Templated_Function* 
 
 Expression sem_expression_cast(Expression* expression, Type* type, Templated_Function* templated_function);
 
+Expression sem_expression_dereference(Expression* expression, Templated_Function* templated_function);
+
 Expression sem_expression_function_call_parse(Ast* ast, Scope* scope, Templated_Function* templated_function);
 
 Expression sem_expression_type_size_parse(Ast* ast, Scope* scope, Templated_Function* templated_function, Expression* type);
@@ -318,4 +330,8 @@ char* sem_type_name(Type* type);
 
 bool sem_type_is_equal_without_allocator_id(Type* type1, Type* type2);
 
+bool sem_base_allocator_matters(Type* type);
+
 Type_Kind sem_get_type_kind(Type* type);
+
+Allocator_Connection_Map sem_copy_allocator_connection_map(Allocator_Connection_Map* map);

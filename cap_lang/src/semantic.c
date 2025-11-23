@@ -19,12 +19,14 @@ Program* sem_program_parse(Ast* ast) {
     Templated_Function* templated_function = alloc(sizeof(Templated_Function));
     templated_function->function = &program->body;
     templated_function->return_type = sem_get_int_type(32, &templated_function->allocator_id_counter);
+    sem_mark_type_as_function_value(templated_function, &templated_function->return_type, true);
     for (u32 i = 0; i < templated_function->function->parameters.count; i++) {
         Function_Parameter* parameter = Function_Parameter_List_get(&templated_function->function->parameters, i);
         Variable variable;
         Ast* parameter_ast = parameter->ast;
         variable.type = sem_type_parse(parameter_ast->declaration_parameter.type, templated_function, &templated_function->parameter_scope, &templated_function->allocator_id_counter);
         massert(variable.type.base->kind != type_invalid, "should have found a valid type");
+        sem_mark_type_as_function_value(templated_function, &variable.type, false);
         variable.name = parameter->name;
         variable.ast = parameter->ast;
         sem_scope_add_variable(&templated_function->parameter_scope, &variable, templated_function);
@@ -74,6 +76,7 @@ Function* sem_function_prototype(Ast* ast) {
             Ast* parameter_ast = parameter->ast;
             variable.type = sem_type_parse(parameter_ast->declaration_parameter.type, templated_function, &templated_function->parameter_scope, &templated_function->allocator_id_counter);
             massert(variable.type.base->kind != type_invalid, "should have found a valid type");
+            sem_mark_type_as_function_value(templated_function, &variable.type, false);
             variable.name = parameter->name;
             variable.ast = parameter->ast;
             sem_scope_add_variable(&templated_function->parameter_scope, &variable, templated_function);
@@ -82,6 +85,7 @@ Function* sem_function_prototype(Ast* ast) {
         templated_function->body.parent = &templated_function->parameter_scope;
         templated_function->return_type = sem_type_parse(templated_function->function->ast->function_declaration.return_type, templated_function, &templated_function->parameter_scope, &templated_function->allocator_id_counter);
         massert(templated_function->return_type.base->kind != type_invalid, "should have found a valid return type");
+        sem_mark_type_as_function_value(templated_function, &templated_function->return_type, true);
         Templated_Function_Ptr_List_add(&function->templated_functions, &templated_function);
     }
 
@@ -208,7 +212,7 @@ Type sem_type_parse(Ast* ast, Templated_Function* templated_function, Scope* sco
         if (allocator->kind != ast_invalid) {
             Allocator new_allocator = sem_allocator_parse(allocator, scope);
             if (!sem_allocator_are_the_same(&new_allocator, &INVALID_ALLOCATOR))
-                sem_set_allocator(templated_function, type.base_allocator_id, &new_allocator);
+                sem_set_allocator(&templated_function->allocator_connection_map, type.base_allocator_id, &new_allocator);
         }
     }
 
@@ -225,7 +229,7 @@ Type sem_type_parse(Ast* ast, Templated_Function* templated_function, Scope* sco
                 if (allocator->kind == ast_invalid) continue;
                 Allocator new_allocator = sem_allocator_parse(allocator, scope);
                 if (sem_allocator_are_the_same(&new_allocator, &INVALID_ALLOCATOR)) continue;
-                sem_set_allocator(templated_function, type.ptr_allocator_ids[i], &new_allocator);
+                sem_set_allocator(&templated_function->allocator_connection_map, type.ptr_allocator_ids[i], &new_allocator);
             }
         }
     }
@@ -330,10 +334,7 @@ Variable* sem_scope_add_variable(Scope* scope, Variable* variable, Templated_Fun
     if (!variable->type.is_ref) {
         variable->type.ref_allocator_id = templated_function->allocator_id_counter;
         templated_function->allocator_id_counter += 1;
-        if (!sem_set_allocator(templated_function, variable->type.ref_allocator_id, &STACK_ALLOCATOR)) {
-            massert(false, "could not set stack allocator");
-            return NULL;
-        }
+        sem_set_allocator(&templated_function->allocator_connection_map, variable->type.ref_allocator_id, &STACK_ALLOCATOR);
         variable->type.is_ref = true;
     }
 
@@ -570,8 +571,8 @@ Expression sem_expression_get_parse(Ast* ast, Scope* scope, Templated_Function* 
         return (Expression){0};
     }
     if (expression.get.expression->type.is_ref) {
-        Type deref_type = sem_dereference_type(&expression.get.expression->type);
-        *expression.get.expression = sem_expression_cast(expression.get.expression, &deref_type, templated_function);
+        *expression.get.expression = sem_expression_dereference(expression.get.expression, templated_function);
+        if (expression.get.expression->kind == expression_invalid) return *expression.get.expression;
     }
     Type deref_type = sem_dereference_type(&expression.get.expression->type);
     expression.type = deref_type;
@@ -810,6 +811,12 @@ Expression sem_expression_alloc_parse(Ast* ast, Scope* scope, Templated_Function
         Type void_type = sem_type_get_void(&templated_function->allocator_id_counter);
         expression.type = sem_pointer_of_type(&void_type, &templated_function->allocator_id_counter);
     }
+
+    // Mark the allocator as used for alloc
+    Allocator allocator = *sem_allocator_get(&templated_function->allocator_connection_map, expression.type.ptr_allocator_ids[expression.type.ptr_count - 1]);
+    allocator.used_for_alloc_or_free = true;
+    sem_set_allocator(&templated_function->allocator_connection_map, expression.type.ptr_allocator_ids[expression.type.ptr_count - 1], &allocator);
+
     expression.alloc.is_type_alloc = is_type;
     return expression;
 }
@@ -926,8 +933,7 @@ Expression sem_expression_implicit_cast(Expression* expression, Type* type, Temp
     Type to_type = *type;
     Expression expression_to_cast = *expression;
     if (from_type.is_ref && !to_type.is_ref) {
-        Type deref_type = sem_dereference_type(&from_type);
-        expression_to_cast = sem_expression_cast(expression, &deref_type, templated_function);
+        expression_to_cast = sem_expression_dereference(expression, templated_function);
         if (expression_to_cast.kind == expression_invalid) return expression_to_cast;
     }
 
@@ -943,13 +949,48 @@ Expression sem_expression_implicit_cast(Expression* expression, Type* type, Temp
     return expression_new;
 }
 
+Expression sem_expression_dereference(Expression* expression, Templated_Function* templated_function) {
+    Expression expression_new = {0};
+    expression_new.ast = expression->ast;
+    expression_new.kind = expression_cast;
+    Type deref_type = sem_dereference_type(&expression->type);
+    expression_new.type = deref_type;
+    expression_new.cast.expression = alloc(sizeof(Expression));
+    *expression_new.cast.expression = *expression;
+    return expression_new;
+}
+
 Expression sem_expression_cast(Expression* expression, Type* type, Templated_Function* templated_function) {
+    Expression err = {0};
     Type* old_type = &expression->type;
 
-    bool res = sem_add_type_allocator_id_connection(templated_function, old_type, type);
-    if (!res) {
-        log_error_ast(expression->ast, "could not cast from %s to %s: becuase of allocators", sem_type_name(old_type), sem_type_name(type));
-        return (Expression){0};
+    bool res = true;
+
+    Type* type1 = &expression->type;
+    Type* type2 = type;
+
+    if (sem_base_allocator_matters(type1) || sem_base_allocator_matters(type2)) {
+        if (!sem_add_allocator_id_connection(&templated_function->allocator_connection_map, type1->base_allocator_id, type2->base_allocator_id, expression->ast)) return err;
+    }
+
+    if (type1->is_ref && type2->is_ref) {
+        if (!sem_add_allocator_id_connection(&templated_function->allocator_connection_map, type1->ref_allocator_id, type2->ref_allocator_id, expression->ast)) return err;
+    }
+
+    u64 largest_size = max(type1->ptr_count, type2->ptr_count);
+    u64 smallest_size = min(type1->ptr_count, type2->ptr_count);
+    u64 start_i = largest_size - smallest_size;
+    for (u32 i = start_i; i < largest_size; i++) {
+        u32 allocator_id1;
+        u32 allocator_id2;
+        if (type1->ptr_count > type2->ptr_count) {
+            allocator_id1 = type1->ptr_allocator_ids[i];
+            allocator_id2 = type2->ptr_allocator_ids[i - start_i];
+        } else {
+            allocator_id1 = type1->ptr_allocator_ids[i - start_i];
+            allocator_id2 = type2->ptr_allocator_ids[i];
+        }
+        if (!sem_add_allocator_id_connection(&templated_function->allocator_connection_map, allocator_id1, allocator_id2, expression->ast)) return err;
     }
 
     Expression expression_new = {0};
@@ -961,15 +1002,15 @@ Expression sem_expression_cast(Expression* expression, Type* type, Templated_Fun
     return expression_new;
 }
 
-static void sem_handel_graph_additions_if_needed(Templated_Function* templated_function, u32 allocator_id) {
-    u32 number_of_allocators = templated_function->allocators.count;
+static void sem_handel_graph_additions_if_needed(Allocator_Connection_Map* map, u32 allocator_id) {
+    u32 number_of_allocators = map->allocators.count;
     if (number_of_allocators <= allocator_id) {
         for (u32 i = number_of_allocators; i <= allocator_id; i++) {
             Allocator base_allocator = {0};
-            Allocator_List_add(&templated_function->allocators, &base_allocator);
+            Allocator_List_add(&map->allocators, &base_allocator);
 
             u32_List base_connection = {0};
-            u32_List_List_add(&templated_function->allocator_id_connections, &base_connection);
+            u32_List_List_add(&map->allocator_id_connections, &base_connection);
         }
     }
 }
@@ -978,77 +1019,93 @@ bool sem_allocator_are_the_same(Allocator* allocator1, Allocator* allocator2) {
     return allocator1->variable == allocator2->variable;
 }
 
-bool sem_add_type_allocator_id_connection(Templated_Function* templated_function, Type* type1, Type* type2) {
-    bool res = sem_add_allocator_id_connection(templated_function, type1->base_allocator_id, type2->base_allocator_id);
-    if (type1->is_ref && type2->is_ref)
-        res = res && sem_add_allocator_id_connection(templated_function, type1->ref_allocator_id, type2->ref_allocator_id);
-
-    u64 largest_size = max(type1->ptr_count, type2->ptr_count);
-    u64 smallest_size = min(type1->ptr_count, type2->ptr_count);
-    for (u32 i = largest_size - smallest_size; i < largest_size; i++) {
-        u32 allocator_id1;
-        u32 allocator_id2;
-        if (type1->ptr_count > type2->ptr_count) {
-            allocator_id1 = type1->ptr_allocator_ids[i];
-            allocator_id2 = type2->ptr_allocator_ids[i - largest_size + smallest_size];
-        } else {
-            allocator_id1 = type1->ptr_allocator_ids[i - largest_size + smallest_size];
-            allocator_id2 = type2->ptr_allocator_ids[i];
-        }
-        res = res && sem_add_allocator_id_connection(templated_function, allocator_id1, allocator_id2);
-    }
-
-    return res;
+bool sem_allocator_are_exactly_the_same(Allocator* allocator1, Allocator* allocator2) {
+    return allocator1->variable == allocator2->variable && allocator1->used_for_alloc_or_free == allocator2->used_for_alloc_or_free && allocator1->is_function_value == allocator2->is_function_value;
 }
 
-bool sem_add_allocator_id_connection(Templated_Function* templated_function, u32 allocator_id1, u32 allocator_id2) {
-    sem_handel_graph_additions_if_needed(templated_function, allocator_id1);
-
-    Allocator* allocator1 = sem_allocator_get(templated_function, allocator_id1);
-    Allocator* allocator2 = sem_allocator_get(templated_function, allocator_id2);
-
-    if (!sem_allocator_are_the_same(allocator1, allocator2)) {
-        if (sem_allocator_are_the_same(allocator1, &UNDEFINED_ALLOCATOR)) {
-            sem_set_allocator(templated_function, allocator_id1, allocator2);
-        } else if (sem_allocator_are_the_same(allocator2, &UNDEFINED_ALLOCATOR)) {
-            sem_set_allocator(templated_function, allocator_id2, allocator1);
-        } else {
-            return false;
+void sem_mark_type_as_function_value(Templated_Function* templated_function, Type* type, bool is_return_value) {
+    if (sem_base_allocator_matters(type)) {
+        u32 allocator_id = type->base_allocator_id;
+        Allocator new_allocator = *sem_allocator_get(&templated_function->allocator_connection_map, allocator_id);
+        new_allocator.is_function_value = true;
+        sem_set_allocator(&templated_function->allocator_connection_map, allocator_id, &new_allocator);
+    }
+    if (type->is_ref || is_return_value) {
+        for (u32 i = 0; i < type->ptr_count; i++) {
+            u32 allocator_id = type->ptr_allocator_ids[i];
+            Allocator new_allocator = *sem_allocator_get(&templated_function->allocator_connection_map, allocator_id);
+            new_allocator.is_function_value = true;
+            sem_set_allocator(&templated_function->allocator_connection_map, allocator_id, &new_allocator);
+        }
+    } else {
+        for (u32 i = 1; i < type->ptr_count; i++) {
+            u32 allocator_id = type->ptr_allocator_ids[i];
+            Allocator new_allocator = *sem_allocator_get(&templated_function->allocator_connection_map, allocator_id);
+            new_allocator.is_function_value = true;
+            sem_set_allocator(&templated_function->allocator_connection_map, allocator_id, &new_allocator);
         }
     }
+}
 
-    u32_List* connections1 = &templated_function->allocator_id_connections.data[allocator_id1];
+bool sem_add_allocator_id_connection(Allocator_Connection_Map* map, u32 allocator_id1, u32 allocator_id2, Ast* ast) {
+    sem_handel_graph_additions_if_needed(map, allocator_id1);
+
+    Allocator* allocator1 = sem_allocator_get(map, allocator_id1);
+    Allocator* allocator2 = sem_allocator_get(map, allocator_id2);
+
+    if (!sem_allocator_are_exactly_the_same(allocator1, allocator2)) {
+        Allocator new_allocator = {0};
+        new_allocator.used_for_alloc_or_free = allocator1->used_for_alloc_or_free || allocator2->used_for_alloc_or_free;
+        new_allocator.is_function_value = allocator1->is_function_value || allocator2->is_function_value;
+        if (sem_allocator_are_the_same(allocator1, allocator2)) {
+            new_allocator.variable = allocator1->variable;
+        } else if (sem_allocator_are_the_same(allocator1, &UNSPECIFIED_ALLOCATOR)) {
+            new_allocator.variable = allocator2->variable;
+        } else if (sem_allocator_are_the_same(allocator2, &UNSPECIFIED_ALLOCATOR)) {
+            new_allocator.variable = allocator1->variable;
+        } else {
+            log_error_ast(ast, "cannot connect allocators becuase they are not the same or unspecified");
+            return false;
+        }
+
+        if (new_allocator.is_function_value) {
+            if (!sem_allocator_are_the_same(&new_allocator, &UNSPECIFIED_ALLOCATOR)) {
+                log_error_ast(ast, "value's allocator must be unspecified(becuase it is returned up to the caller)");
+                return false;
+            }
+        }
+
+        sem_set_allocator(map, allocator_id1, &new_allocator);
+        sem_set_allocator(map, allocator_id2, &new_allocator);
+    }
+
+    u32_List* connections1 = &map->allocator_id_connections.data[allocator_id1];
     u32_List_add(connections1, &allocator_id2);
 
-    u32_List* connections2 = &templated_function->allocator_id_connections.data[allocator_id2];
+    u32_List* connections2 = &map->allocator_id_connections.data[allocator_id2];
     u32_List_add(connections2, &allocator_id1);
 
     return true;
 }
 
-bool sem_set_allocator(Templated_Function* templated_function, u32 allocator_id, Allocator* allocator) {
-    sem_handel_graph_additions_if_needed(templated_function, allocator_id);
+void sem_set_allocator(Allocator_Connection_Map* map, u32 allocator_id, Allocator* allocator) {
+    sem_handel_graph_additions_if_needed(map, allocator_id);
 
-    Allocator* existing_allocator = sem_allocator_get(templated_function, allocator_id);
-    if (sem_allocator_are_the_same(existing_allocator, allocator)) return true;
-    if (!sem_allocator_are_the_same(existing_allocator, &UNDEFINED_ALLOCATOR)) return false;
+    Allocator* existing_allocator = sem_allocator_get(map, allocator_id);
+    if (sem_allocator_are_exactly_the_same(existing_allocator, allocator)) return;
 
-    *Allocator_List_get(&templated_function->allocators, allocator_id) = *allocator;
-    u32_List connections = templated_function->allocator_id_connections.data[allocator_id];
+    *Allocator_List_get(&map->allocators, allocator_id) = *allocator;
+    u32_List connections = map->allocator_id_connections.data[allocator_id];
     for (u32 i = 0; i < connections.count; i++) {
         u32 connection = *u32_List_get(&connections, i);
-        Allocator* connection_allocator = sem_allocator_get(templated_function, connection);
-        if (sem_allocator_are_the_same(connection_allocator, allocator)) continue;
-        bool res = sem_set_allocator(templated_function, connection, allocator);
-        massert(res, "should have set allocator");
+        Allocator* connection_allocator = sem_allocator_get(map, connection);
+        sem_set_allocator(map, connection, allocator);
     }
-
-    return true;
 }
 
-Allocator* sem_allocator_get(Templated_Function* templated_function, u32 allocator_id) {
-    sem_handel_graph_additions_if_needed(templated_function, allocator_id);
-    return &templated_function->allocators.data[allocator_id];
+Allocator* sem_allocator_get(Allocator_Connection_Map* map, u32 allocator_id) {
+    sem_handel_graph_additions_if_needed(map, allocator_id);
+    return &map->allocators.data[allocator_id];
 }
 
 Type sem_copy_type(Type* type) {
@@ -1129,6 +1186,10 @@ char* sem_type_name(Type* type) {
     return type_name;
 }
 
+bool sem_base_allocator_matters(Type* type) {
+    return false;
+}
+
 bool sem_type_is_equal_without_allocator_id(Type* type1, Type* type2) {
     bool base_is_equal = type1->base == type2->base;
     bool ptr_count_is_equal = type1->ptr_count == type2->ptr_count;
@@ -1140,4 +1201,25 @@ Type_Kind sem_get_type_kind(Type* type) {
     if (type->is_ref) return type_ref;
     if (type->ptr_count > 0) return type_ptr;
     return type->base->kind;
+}
+
+Allocator_Connection_Map sem_copy_allocator_connection_map(Allocator_Connection_Map* map) {
+    Allocator_Connection_Map new_map = {0};
+    new_map.allocators = map->allocators;
+    new_map.allocators.capacity = new_map.allocators.count;
+    new_map.allocators.data = alloc(sizeof(Allocator) * new_map.allocators.capacity);
+    memcpy(new_map.allocators.data, map->allocators.data, sizeof(Allocator) * new_map.allocators.capacity);
+
+    new_map.allocator_id_connections = map->allocator_id_connections;
+    new_map.allocator_id_connections.capacity = new_map.allocator_id_connections.count;
+    new_map.allocator_id_connections.data = alloc(sizeof(u32_List) * new_map.allocator_id_connections.capacity);
+    memcpy(new_map.allocator_id_connections.data, map->allocator_id_connections.data, sizeof(u32_List) * new_map.allocator_id_connections.capacity);
+
+    for (u32 i = 0; i < new_map.allocators.capacity; i++) {
+        new_map.allocator_id_connections.data[i].capacity = new_map.allocator_id_connections.data[i].capacity;
+        new_map.allocator_id_connections.data[i].data = alloc(sizeof(u32) * new_map.allocator_id_connections.data[i].capacity);
+        memcpy(new_map.allocator_id_connections.data[i].data, map->allocator_id_connections.data[i].data, sizeof(u32) * new_map.allocator_id_connections.data[i].capacity);
+    }
+
+    return new_map;
 }

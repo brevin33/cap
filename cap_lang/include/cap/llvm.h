@@ -21,17 +21,20 @@ typedef struct LLVM_Variable_Pair {
     LLVMValueRef value;
 } LLVM_Variable_Pair;
 
+typedef struct LLVM_Scope LLVM_Scope;
 typedef struct LLVM_Scope {
     Scope* scope;
     LLVM_Variable_Pair_List variables;
     LLVMBasicBlockRef block;
     bool has_exit;
+    LLVM_Scope* parent;
 } LLVM_Scope;
 
 typedef struct LLVM_Function {
     LLVMValueRef function_value;
     LLVMTypeRef function_type;
     Templated_Function* templated_function;
+    Allocator_Connection_Map allocator_connection_map;
 } LLVM_Function;
 
 typedef struct LLVM_Context {
@@ -53,13 +56,13 @@ LLVMTypeRef llvm_get_type(Type* type);
 
 void llvm_compile_program(Program* program, char* build_dir);
 
-LLVM_Scope llvm_compile_scope(Scope* scope, LLVM_Function* function);
+LLVM_Scope llvm_compile_scope(Scope* scope, LLVM_Function* function, LLVM_Scope* parent);
 
 LLVMValueRef llvm_variable_to_llvm(LLVM_Scope* scope, Variable* variable);
 
 void llvm_store_variable_llvm_value(LLVM_Scope* scope, Variable* variable, LLVMValueRef value);
 
-LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Function* function_getting_this);
+LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Function* function_getting_this, Expression_List* parameters, Type* return_type);
 
 bool llvm_build_statement(Statement* statement, LLVM_Scope* scope, LLVM_Function* function);
 

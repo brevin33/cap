@@ -80,7 +80,7 @@ void rainbow_printf(const char* format, ...) {
 }
 
 void* alloc(size_t size) {
-    assert(size > 0);
+    assert(size >= 0);
     assert(size < 1024 * 1024);  // just doing this to know if a big allaocation happens as i tis probably a bug
     size *= 100;
     return arena_alloc(&context.arena, size);
