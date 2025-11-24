@@ -83,6 +83,14 @@ void project_semantic_analysis(Project* project) {
     sem_default_setup_types();
     for (u64 i = 0; i < project->files.count; i++) {
         File* file = *File_Ptr_List_get(&project->files, i);
+        for (u64 j = 0; j < file->ast.top_level.structs.count; j++) {
+            Ast* ast = &file->ast.top_level.structs.data[j];
+            sem_add_struct(ast);
+        }
+    }
+
+    for (u64 i = 0; i < project->files.count; i++) {
+        File* file = *File_Ptr_List_get(&project->files, i);
         for (u64 j = 0; j < file->ast.top_level.functions.count; j++) {
             Ast* ast = &file->ast.top_level.functions.data[j];
             Function* function = sem_function_prototype(ast);
@@ -113,7 +121,7 @@ void project_semantic_analysis(Project* project) {
 
 void project_compile_llvm(Project* project) {
     if (cap_context.error_count > 0) {
-        red_printf("can't continue with llvm compilation because of errors\n");
+        red_printf("can't continue with llvm compilation because of errors in semantic analysis\n");
         return;
     }
     // compilation starts

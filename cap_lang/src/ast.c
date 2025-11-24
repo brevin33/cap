@@ -103,10 +103,14 @@ Ast ast_from_tokens(Token* token_start) {
                 Ast_List_add(&ast.top_level.programs, &val);
                 break;
             }
+            case ast_struct: {
+                Ast_List_add(&ast.top_level.structs, &val);
+                break;
+            }
             case ast_invalid: {
                 while (true) {
                     if (token->type == tt_lbrace) {
-                        u32 num_braces = 1;
+                        u32 num_braces = 0;
                         Token* opening_brace = token;
                         while (true) {
                             if (token->type == tt_lbrace) num_braces++;
@@ -130,7 +134,7 @@ Ast ast_from_tokens(Token* token_start) {
                 break;
             }
             default: {
-                log_error_ast(&ast, "not a valid ast in the top level");
+                log_error_ast(&val, "not a valid ast in the top level");
                 break;
             }
         }
@@ -274,6 +278,11 @@ Ast ast_variable_declaration_parse(Token** tokens) {
         *ast.variable_declaration.assignment = assignment;
     } else {
         ast.variable_declaration.assignment = NULL;
+    }
+
+    if (token->type != tt_end_statement) {
+        log_error_token(token, "expected end statement after variable declaration");
+        return err;
     }
 
     ast.num_tokens = token - *tokens;
@@ -692,7 +701,7 @@ Ast ast_body_parse(Token** tokens) {
             if (statement.kind == ast_invalid) {
                 while (true) {
                     if (token->type == tt_lbrace) {
-                        u32 num_braces = 1;
+                        u32 num_braces = 0;
                         Token* opening_brace = token;
                         while (true) {
                             if (token->type == tt_lbrace) num_braces++;
@@ -955,10 +964,108 @@ Ast ast_general_id_parse(Token** tokens) {
     return ast_expression_parse(tokens, delimiters, arr_length(delimiters));
 }
 
+Ast ast_struct_field_parse(Token** tokens) {
+    Token* token = *tokens;
+    Ast err = {0};
+    Ast ast = {0};
+    ast.token_start = token;
+    ast.kind = ast_struct_field;
+
+    Ast type = ast_type_parse(&token);
+    if (type.kind == ast_invalid) return type;
+    ast.struct_field.type = alloc(sizeof(Ast));
+    *ast.struct_field.type = type;
+
+    if (token->type != tt_id) {
+        log_error_token(token, "expected field name");
+        return err;
+    }
+    ast.struct_field.name = token_get_id(token);
+    token++;
+
+    if (token->type != tt_end_statement) {
+        log_error_token(token, "expected end statement after struct field");
+        return err;
+    }
+
+    ast.num_tokens = token - *tokens;
+    *tokens = token;
+    return ast;
+}
+
+Ast ast_struct_body_parse(Token** tokens) {
+    Token* token = *tokens;
+    Ast err = {0};
+    Ast ast = {0};
+    ast.token_start = token;
+    ast.kind = ast_struct_body;
+
+    if (token->type != tt_lbrace) {
+        log_error_token(token, "expected '{' for struct body");
+        return err;
+    }
+    Token* opening_brace = token;
+    token++;
+
+    if (token->type != tt_rbrace) {
+        while (true) {
+            Ast struct_field = ast_struct_field_parse(&token);
+            if (struct_field.kind == ast_invalid) return err;
+            Ast_List_add(&ast.struct_body.fields, &struct_field);
+            massert(token->type == tt_end_statement, "should have found a tt_end_statement for after statement");
+            token++;
+            if (token->type == tt_rbrace) break;
+        }
+    }
+    massert(token->type == tt_rbrace, "should have found a '}' for block");
+    token++;
+
+    if (token->type != tt_end_statement) {
+        log_error_token(token, "expected end statement after struct body");
+        return err;
+    }
+
+    ast.num_tokens = token - *tokens;
+    *tokens = token;
+    return ast;
+}
+
+Ast ast_struct_parse(Token** tokens) {
+    Token* token = *tokens;
+    Ast err = {0};
+    Ast ast = {0};
+    ast.token_start = token;
+    ast.kind = ast_struct;
+
+    if (token->type != tt_struct) {
+        log_error_token(token, "expected struct token when parsing struct");
+        return err;
+    }
+    token++;
+
+    if (token->type != tt_id) {
+        log_error_token(token, "expected struct name when parsing struct");
+        return err;
+    }
+    ast.struct_.name = token_get_id(token);
+    token++;
+
+    ast.struct_.body = alloc(sizeof(Ast));
+    *ast.struct_.body = ast_struct_body_parse(&token);
+    if (ast.struct_.body->kind == ast_invalid) return err;
+
+    ast.num_tokens = token - *tokens;
+    *tokens = token;
+    return ast;
+}
+
 Ast ast_general_parse(Token** tokens) {
     switch ((*tokens)->type) {
         case tt_id: {
             return ast_general_id_parse(tokens);
+        }
+        case tt_struct: {
+            return ast_struct_parse(tokens);
         }
         case tt_return: {
             return ast_return_parse(tokens);

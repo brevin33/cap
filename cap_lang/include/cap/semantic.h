@@ -13,17 +13,10 @@ typedef enum Type_Kind {
     type_ref,
     type_void,
     type_type,
+    type_struct,
 } Type_Kind;
 
-typedef struct Type_Base {
-    Ast* ast;
-    Type_Kind kind;
-    char* name;
-    union {
-        u32 number_bit_size;
-    };
-} Type_Base;
-
+typedef struct Type_Base Type_Base;
 typedef struct Type {
     Type_Base* base;
     u32* ptr_allocator_ids;
@@ -32,6 +25,36 @@ typedef struct Type {
     u32 ref_allocator_id;
     bool is_ref;
 } Type;
+
+typedef struct Struct_Field Struct_Field;
+typedef struct Struct_Field_Allocator_Info {
+    bool is_field;
+    union {
+        Struct_Field* field;
+        Variable* global;
+    };
+} Struct_Field_Allocator_Info;
+
+typedef struct Struct_Field {
+    char* name;
+    Type type;
+    Struct_Field_Allocator_Info base_allocator_info;
+    Struct_Field_Allocator_Info_List ptr_allocator_infos;
+} Struct_Field;
+
+typedef struct Type_Base_Struct {
+    Struct_Field_List fields;
+} Type_Base_Struct;
+
+typedef struct Type_Base {
+    Ast* ast;
+    Type_Kind kind;
+    char* name;
+    union {
+        u32 number_bit_size;
+        Type_Base_Struct struct_;
+    };
+} Type_Base;
 
 typedef struct Function_Parameter {
     Ast* ast;
@@ -58,7 +81,13 @@ typedef enum Expression_Kind {
     expression_type,
     expression_type_size,
     expression_type_align,
+    expression_struct_access,
 } Expression_Kind;
+
+typedef struct Expression_Struct_Access {
+    Expression* expression;
+    u32 field_index;
+} Expression_Struct_Access;
 
 typedef struct Expression_Function_Call {
     Expression_List parameters;
@@ -123,6 +152,7 @@ typedef struct Expression {
         Expression_Type expression_type;
         Expression_Type_Size type_size;
         Expression_Type_Align type_align;
+        Expression_Struct_Access struct_access;
     };
 } Expression;
 
@@ -173,15 +203,16 @@ typedef struct Scope {
 
 typedef struct Allocator {
     Variable* variable;
+    Scope* scope;
     bool used_for_alloc_or_free;
     bool is_function_value;
 } Allocator;
 
 #define UNSPECIFIED_ALLOCATOR \
-    (Allocator) { .variable = NULL, .used_for_alloc_or_free = false, .is_function_value = false }
+    (Allocator) { .variable = NULL, .scope = NULL, .used_for_alloc_or_free = false, .is_function_value = false }
 
 #define STACK_ALLOCATOR \
-    (Allocator) { .variable = (Variable*)1, .used_for_alloc_or_free = false, .is_function_value = false }
+    (Allocator) { .variable = (Variable*)1, .scope = NULL, .used_for_alloc_or_free = false, .is_function_value = false }
 
 // #define LOOSE_ALLOCATOR \
 //     (Allocator) { .variable = (Variable*)2, .used_for_alloc_or_free = false, .is_function_value = false }
@@ -242,7 +273,11 @@ bool sem_allocator_are_exactly_the_same(Allocator* allocator1, Allocator* alloca
 
 Allocator sem_allocator_parse(Ast* ast, Scope* scope);
 
-Type sem_type_parse(Ast* ast, Templated_Function* templated_function, Scope* scope, u32* allocator_id_counter);
+Struct_Field sem_struct_field_parse(Ast* ast, Struct_Field_List* other_feilds);
+
+void sem_add_struct(Ast* ast);
+
+Type sem_type_parse(Ast* ast, Allocator_Connection_Map* map, Scope* scope, u32* allocator_id_counter);
 
 Type sem_type_get_const_int(u32* allocator_id_counter);
 
@@ -310,11 +345,15 @@ Expression sem_expression_type_align_parse(Ast* ast, Scope* scope, Templated_Fun
 
 Expression sem_function_call(char* name, Expression_List* parameters, Ast* ast, Templated_Function* calling_templated_function);
 
+Expression sem_expression_struct_access_parse(Ast* ast, Scope* scope, Templated_Function* templated_function, Expression* struct_expr);
+
 bool sem_can_implicitly_cast(Type* from_type, Type* to_type);
 
 Expression sem_expression_implicit_cast(Expression* expression, Type* type, Templated_Function* templated_function);
 
 char* sem_type_name(Type* type);
+
+Type sem_type_copy_allocator_id(Type* to_type, Type* from_type);
 
 Type sem_copy_type(Type* type);
 

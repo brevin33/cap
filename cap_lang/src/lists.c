@@ -33,3 +33,7 @@ create_list_impl(LLVM_Function_List, LLVM_Function);
 create_list_impl(Expression_List, Expression);
 
 create_list_impl(LLVMTypeRef_List, LLVMTypeRef);
+
+create_list_impl(Struct_Field_Allocator_Info_List, Struct_Field_Allocator_Info);
+
+create_list_impl(Struct_Field_List, Struct_Field);

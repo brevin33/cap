@@ -49,3 +49,9 @@ create_list_headers(Expression_List, Expression);
 
 typedef struct LLVMOpaqueType *LLVMTypeRef;
 create_list_headers(LLVMTypeRef_List, LLVMTypeRef);
+
+typedef struct Struct_Field Struct_Field;
+create_list_headers(Struct_Field_List, Struct_Field);
+
+typedef struct Struct_Field_Allocator_Info Struct_Field_Allocator_Info;
+create_list_headers(Struct_Field_Allocator_Info_List, Struct_Field_Allocator_Info);

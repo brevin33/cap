@@ -45,9 +45,26 @@ typedef enum Ast_Kind {
     ast_less_than_equals,
     ast_greater_than_equals,
     ast_allocator,
+    ast_struct,
+    ast_struct_body,
+    ast_struct_field,
 } Ast_Kind;
 
 typedef struct Ast Ast;
+
+typedef struct Ast_Struct {
+    char* name;
+    Ast* body;
+} Ast_Struct;
+
+typedef struct Ast_Struct_Body {
+    Ast_List fields;
+} Ast_Struct_Body;
+
+typedef struct Ast_Struct_Field {
+    Ast* type;
+    char* name;
+} Ast_Struct_Field;
 
 typedef struct Ast_Alloc {
     Ast* parameters;
@@ -110,6 +127,7 @@ typedef struct Ast_Body {
 typedef struct Ast_Top_Level {
     Ast_List functions;
     Ast_List programs;
+    Ast_List structs;
 } Ast_Top_Level;
 
 typedef struct Ast_Return {
@@ -180,6 +198,9 @@ typedef struct Ast {
         Ast_Allocator allocator;
         Ast_Get get;
         Ast_Ptr ptr;
+        Ast_Struct struct_;
+        Ast_Struct_Body struct_body;
+        Ast_Struct_Field struct_field;
     };
 } Ast;
 
@@ -247,3 +268,9 @@ Ast ast_allocator_parse(Token** tokens);
 Ast ast_get_parse(Token** tokens, Ast* lhs);
 
 Ast ast_ptr_parse(Token** tokens, Ast* lhs);
+
+Ast ast_struct_parse(Token** tokens);
+
+Ast ast_struct_body_parse(Token** tokens);
+
+Ast ast_struct_field_parse(Token** tokens);

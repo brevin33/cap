@@ -6,9 +6,10 @@ void token_swap_for_keyword(Token *token) {
     char *id = token_get_id(token);
     if (strcmp(id, "return") == 0) {
         token->type = tt_return;
-    }
-    if (strcmp(id, "program") == 0) {
+    } else if (strcmp(id, "program") == 0) {
         token->type = tt_program;
+    } else if (strcmp(id, "struct") == 0) {
+        token->type = tt_struct;
     }
 }
 
@@ -54,6 +55,7 @@ bool token_last_ends_statement_and_endline(Token *token) {
         case tt_program:
         case tt_mul:
         case tt_bit_and:
+        case tt_struct:
             return true;
         case tt_at:
         case tt_add:
@@ -361,6 +363,10 @@ double token_get_float(Token *token) {
 
 void token_print(Token *token) {
     switch (token->type) {
+        case tt_struct: {
+            printf("struct ");
+            break;
+        }
         case tt_at: {
             printf("@ ");
             break;

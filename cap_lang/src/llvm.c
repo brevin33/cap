@@ -19,6 +19,14 @@ LLVMTypeRef llvm_get_type(Type* type) {
         return LLVMPointerType(ref_type, 0);
     }
     switch (type->base->kind) {
+        case type_struct: {
+            LLVMTypeRef struct_field_types[type->base->struct_.fields.count];
+            for (u32 i = 0; i < type->base->struct_.fields.count; i++) {
+                Struct_Field* field = &type->base->struct_.fields.data[i];
+                struct_field_types[i] = llvm_get_type(&field->type);
+            }
+            return LLVMStructType(struct_field_types, type->base->struct_.fields.count, false);
+        }
         case type_int:
             return LLVMIntType(type->base->number_bit_size);
         case type_float:
@@ -102,14 +110,12 @@ LLVM_Scope llvm_compile_scope(Scope* scope, LLVM_Function* function, LLVM_Scope*
     for (u32 i = 0; i < scope->variables.count; i++) {
         Variable* variable = *Variable_Ptr_List_get(&scope->variables, i);
         Allocator* allocator = sem_allocator_get(&function->allocator_connection_map, variable->type.ref_allocator_id);
-        if (sem_allocator_are_the_same(allocator, &STACK_ALLOCATOR)) {
-            Type deref_type = sem_dereference_type(&variable->type);
-            LLVMTypeRef llvm_type = llvm_get_type(&deref_type);
-            LLVMValueRef alloca = LLVMBuildAlloca(llvm_context.builder, llvm_type, variable->name);
-            LLVMValueRef zero = LLVMConstNull(llvm_type);
-            LLVMBuildStore(llvm_context.builder, zero, alloca);
-            llvm_store_variable_llvm_value(&llvm_scope, variable, alloca);
-        }
+        Type deref_type = sem_dereference_type(&variable->type);
+        LLVMTypeRef llvm_type = llvm_get_type(&deref_type);
+        LLVMValueRef alloca = LLVMBuildAlloca(llvm_context.builder, llvm_type, variable->name);
+        LLVMValueRef zero = LLVMConstNull(llvm_type);
+        LLVMBuildStore(llvm_context.builder, zero, alloca);
+        llvm_store_variable_llvm_value(&llvm_scope, variable, alloca);
     }
 
     for (u32 i = 0; i < scope->statements.count; i++) {
@@ -140,8 +146,26 @@ LLVMValueRef llvm_build_expression_variable(Expression* expression, LLVM_Scope* 
     return llvm_variable_to_llvm(scope, variable);
 }
 
+LLVMValueRef llvm_build_expression_struct_access(Expression* expression, LLVM_Scope* scope, LLVM_Function* function) {
+    LLVMValueRef struct_expr = llvm_build_expression(expression->struct_access.expression, scope, function);
+    u32 field_index = expression->struct_access.field_index;
+
+    Type* type = &expression->type;
+    Type struct_type = expression->struct_access.expression->type;
+    if (struct_type.is_ref) struct_type = sem_dereference_type(&struct_type);
+    LLVMTypeRef llvm_type = llvm_get_type(&struct_type);
+    if (type->is_ref) {
+        return LLVMBuildStructGEP2(llvm_context.builder, llvm_type, struct_expr, field_index, "");
+    } else {
+        return LLVMBuildExtractValue(llvm_context.builder, struct_expr, field_index, "");
+    }
+}
+
 LLVMValueRef llvm_build_expression(Expression* expression, LLVM_Scope* scope, LLVM_Function* function) {
     switch (expression->kind) {
+        case expression_struct_access: {
+            return llvm_build_expression_struct_access(expression, scope, function);
+        }
         case expression_function_call: {
             return llvm_build_expression_function_call(expression, scope, function);
         }
@@ -443,14 +467,21 @@ LLVMValueRef llvm_build_expression_cast(Expression* expression, LLVM_Scope* scop
 bool llvm_build_statement_assignment(Statement* statement, LLVM_Scope* scope, LLVM_Function* function) {
     massert(statement->type == statement_assignment, "should have found an assignment");
     LLVMValueRef assignee = llvm_build_expression(&statement->assignment.assignee, scope, function);
+    massert(LLVMGetTypeKind(LLVMTypeOf(assignee)) == LLVMPointerTypeKind, "should have found a pointer");
+
     massert(statement->assignment.assignee.type.is_ref, "should have found a ref to assign to");
     LLVMValueRef value = llvm_build_expression(&statement->assignment.value, scope, function);
+
     LLVMBuildStore(llvm_context.builder, value, assignee);
     return false;
 }
 
 bool llvm_build_statement_return(Statement* statement, LLVM_Scope* scope, LLVM_Function* function) {
     massert(statement->type == statement_return, "should have found a return");
+    if (statement->return_.value.kind == expression_invalid) {
+        LLVMBuildRetVoid(llvm_context.builder);
+        return true;
+    }
     LLVMValueRef value = llvm_build_expression(&statement->return_.value, scope, function);
     LLVMBuildRet(llvm_context.builder, value);
     return true;
@@ -496,7 +527,7 @@ static bool llvm_allocator_id_match_for_allocator_function_call(u32 function_all
     massert(function_allocator->is_function_value, "should have found a function value");
     if (!function_allocator->used_for_alloc_or_free) return true;
 
-    Allocator* parameter_allocator = sem_allocator_get(&function->allocator_connection_map, parameter_allocator_id);
+    Allocator* parameter_allocator = sem_allocator_get(&parameter_function->allocator_connection_map, parameter_allocator_id);
 
     if (sem_allocator_are_the_same(function_allocator, parameter_allocator)) return true;
 
@@ -524,26 +555,14 @@ static bool llvm_type_match_for_allocator_function_call(Type* function_type, Typ
     }
 
     massert(function_type->ptr_count == parameter_type->ptr_count, "should have found a valid type");
-    if (is_return_value) {
-        for (u32 i = 0; i < function_type->ptr_count; i++) {
-            u32 function_allocator_id = function_type->ptr_allocator_ids[i];
-            u32 parameter_allocator_id = parameter_type->ptr_allocator_ids[i];
-            if (!llvm_allocator_id_match_for_allocator_function_call(function_allocator_id, parameter_allocator_id, function, parameter_function)) return false;
-        }
-
-        massert(function_type->is_ref == parameter_type->is_ref, "should have found a valid type");
-        if (function_type->is_ref) {
-            u32 function_ref_allocator_id = function_type->ref_allocator_id;
-            u32 parameter_ref_allocator_id = parameter_type->ref_allocator_id;
-            if (!llvm_allocator_id_match_for_allocator_function_call(function_ref_allocator_id, parameter_ref_allocator_id, function, parameter_function)) return false;
-        }
-    } else {
-        massert(function_type->is_ref == parameter_type->is_ref, "should have found a valid type");
-        for (u32 i = function_type->is_ref ? 0 : 1; i < function_type->ptr_count; i++) {
-            u32 function_allocator_id = function_type->ptr_allocator_ids[i];
-            u32 parameter_allocator_id = parameter_type->ptr_allocator_ids[i];
-            if (!llvm_allocator_id_match_for_allocator_function_call(function_allocator_id, parameter_allocator_id, function, parameter_function)) return false;
-        }
+    massert(function_type->is_ref == parameter_type->is_ref, "should have found a valid type");
+    massert(!function_type->is_ref, "should have found a valid type");
+    u64 loop_size = function_type->ptr_count;
+    if (!is_return_value && loop_size > 0) loop_size -= 1;
+    for (u32 i = 0; i < loop_size; i++) {
+        u32 function_allocator_id = function_type->ptr_allocator_ids[i];
+        u32 parameter_allocator_id = parameter_type->ptr_allocator_ids[i];
+        if (!llvm_allocator_id_match_for_allocator_function_call(function_allocator_id, parameter_allocator_id, function, parameter_function)) return false;
     }
 
     return true;
@@ -552,11 +571,15 @@ static bool llvm_type_match_for_allocator_function_call(Type* function_type, Typ
 static void llvm_add_id_allocator_llvm_type_to_list(u32 function_allocator_id, u32 parameter_allocator_id, LLVM_Function* function, LLVM_Function* parameter_function, bool is_return_value, LLVMTypeRef_List* list_to_add_to) {
     Allocator* function_allocator = sem_allocator_get(&function->allocator_connection_map, function_allocator_id);
     if (function_allocator->is_function_value) {
-        Allocator* parameter_allocator = sem_allocator_get(&function->allocator_connection_map, parameter_allocator_id);
+        Allocator* parameter_allocator = sem_allocator_get(&parameter_function->allocator_connection_map, parameter_allocator_id);
         Variable* function_allocator_variable = function_allocator->variable;
         Variable* parameter_allocator_variable = parameter_allocator->variable;
         if ((u64)parameter_allocator_variable <= 255) {
-            sem_set_allocator(&function->allocator_connection_map, function_allocator_id, parameter_allocator);
+            Allocator new_allocator = {0};
+            new_allocator.variable = parameter_allocator_variable;
+            new_allocator.used_for_alloc_or_free = true;
+            new_allocator.is_function_value = true;
+            sem_set_allocator(&function->allocator_connection_map, function_allocator_id, &new_allocator);
         } else {
             Allocator new_allocator = {0};
             Variable* new_variable = alloc(sizeof(Variable));
@@ -580,27 +603,15 @@ static void llvm_add_type_allocator_llvm_type_to_list(Type* function_type, Type*
         llvm_add_id_allocator_llvm_type_to_list(function_allocator_id, parameter_allocator_id, function, parameter_function, is_return_value, list_to_add_to);
     }
 
+    u64 loop_size = function_type->ptr_count;
+    if (!is_return_value && loop_size > 0) loop_size -= 1;
     massert(function_type->ptr_count == parameter_type->ptr_count, "should have found a valid type");
-    if (is_return_value) {
-        for (u32 i = 0; i < function_type->ptr_count; i++) {
-            u32 function_allocator_id = function_type->ptr_allocator_ids[i];
-            u32 parameter_allocator_id = parameter_type->ptr_allocator_ids[i];
-            llvm_add_id_allocator_llvm_type_to_list(function_allocator_id, parameter_allocator_id, function, parameter_function, is_return_value, list_to_add_to);
-        }
-
-        massert(function_type->is_ref == parameter_type->is_ref, "should have found a valid type");
-        if (function_type->is_ref) {
-            u32 function_ref_allocator_id = function_type->ref_allocator_id;
-            u32 parameter_ref_allocator_id = parameter_type->ref_allocator_id;
-            llvm_add_id_allocator_llvm_type_to_list(function_ref_allocator_id, parameter_ref_allocator_id, function, parameter_function, is_return_value, list_to_add_to);
-        }
-    } else {
-        massert(function_type->is_ref == parameter_type->is_ref, "should have found a valid type");
-        for (u32 i = function_type->is_ref ? 0 : 1; i < function_type->ptr_count; i++) {
-            u32 function_allocator_id = function_type->ptr_allocator_ids[i];
-            u32 parameter_allocator_id = parameter_type->ptr_allocator_ids[i];
-            llvm_add_id_allocator_llvm_type_to_list(function_allocator_id, parameter_allocator_id, function, parameter_function, is_return_value, list_to_add_to);
-        }
+    massert(function_type->is_ref == parameter_type->is_ref, "should have found a valid type");
+    massert(!function_type->is_ref, "should have found a valid type");
+    for (u32 i = 0; i < loop_size; i++) {
+        u32 function_allocator_id = function_type->ptr_allocator_ids[i];
+        u32 parameter_allocator_id = parameter_type->ptr_allocator_ids[i];
+        llvm_add_id_allocator_llvm_type_to_list(function_allocator_id, parameter_allocator_id, function, parameter_function, is_return_value, list_to_add_to);
     }
 }
 
@@ -619,9 +630,11 @@ LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Fu
             Variable* function_variable = *Variable_Ptr_List_get(&function->templated_function->parameter_scope.variables, j);
             Expression* parameter = Expression_List_get(parameters, j);
 
-            Type* function_type = &function_variable->type;
+            Type function_type = function_variable->type;
+            function_type = sem_dereference_type(&function_type);
+
             Type* parameter_type = &parameter->type;
-            if (!llvm_type_match_for_allocator_function_call(function_type, parameter_type, function, function_getting_this, false)) {
+            if (!llvm_type_match_for_allocator_function_call(&function_type, parameter_type, function, function_getting_this, false)) {
                 allocators_match = false;
                 break;
             }
@@ -646,10 +659,11 @@ LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Fu
 
     for (u32 i = 0; i < templated_function->parameter_scope.variables.count; i++) {
         Variable* variable = *Variable_Ptr_List_get(&templated_function->parameter_scope.variables, i);
-        Type* type = &variable->type;
+        Type type = variable->type;
+        type = sem_dereference_type(&type);
         Expression* parameter = Expression_List_get(parameters, i);
         Type* expression_type = &parameter->type;
-        llvm_add_type_allocator_llvm_type_to_list(type, expression_type, &function, function_getting_this, false, &llvm_parameter_types);
+        llvm_add_type_allocator_llvm_type_to_list(&type, expression_type, &function, function_getting_this, false, &llvm_parameter_types);
     }
     llvm_add_type_allocator_llvm_type_to_list(&templated_function->return_type, return_type, &function, function_getting_this, true, NULL);
 
@@ -680,18 +694,20 @@ LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Fu
         Variable* variable = *Variable_Ptr_List_get(&templated_function->parameter_scope.variables, i);
         Allocator* allocator = sem_allocator_get(&function.allocator_connection_map, variable->type.ref_allocator_id);
         LLVMValueRef parameter_value = LLVMGetParam(function_value, i);
-        if (sem_allocator_are_the_same(allocator, &STACK_ALLOCATOR)) {
-            Type deref_type = sem_dereference_type(&variable->type);
-            LLVMTypeRef llvm_type = llvm_get_type(&deref_type);
-            LLVMValueRef alloca = LLVMBuildAlloca(llvm_context.builder, llvm_type, variable->name);
-            LLVMBuildStore(llvm_context.builder, parameter_value, alloca);
-            llvm_store_variable_llvm_value(&llvm_scope, variable, alloca);
-        } else {
-            llvm_store_variable_llvm_value(&llvm_scope, variable, parameter_value);
-        }
+        Type deref_type = sem_dereference_type(&variable->type);
+        LLVMTypeRef llvm_type = llvm_get_type(&deref_type);
+        LLVMValueRef alloca = LLVMBuildAlloca(llvm_context.builder, llvm_type, variable->name);
+        LLVMBuildStore(llvm_context.builder, parameter_value, alloca);
+        llvm_store_variable_llvm_value(&llvm_scope, variable, alloca);
     }
 
     LLVM_Scope body_scope = llvm_compile_scope(&templated_function->body, &function, &llvm_scope);
+    if (!body_scope.has_exit) {
+        Type_Kind return_type_kind = sem_get_type_kind(&templated_function->return_type);
+        massert(return_type_kind == type_void, "should never get here");
+        LLVMBuildRetVoid(llvm_context.builder);
+    }
+
     LLVMPositionBuilderAtEnd(llvm_context.builder, entry_block);
     LLVMBuildBr(llvm_context.builder, body_scope.block);
 
@@ -805,6 +821,7 @@ char* llvm_evaluate_const_int(Expression* expression) {
         case expression_alloc:
         case expression_get:
         case expression_ptr:
+        case expression_struct_access:
         case expression_variable:
         case expression_cast:
         case expression_invalid: {
@@ -840,6 +857,7 @@ double llvm_evaluate_const_float(Expression* expression) {
         case expression_type:
         case expression_function_call:
         case expression_alloc:
+        case expression_struct_access:
         case expression_variable:
         case expression_get:
         case expression_ptr:
