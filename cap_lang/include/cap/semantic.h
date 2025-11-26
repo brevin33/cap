@@ -259,6 +259,8 @@ void sem_templated_function_implement(Templated_Function* function, Ast* scope_a
 
 // bool sem_add_type_allocator_id_connection(Templated_Function* templated_function, Type* type1, Type* type2);
 
+Type sem_type_make_allocator_unspecified(Type* type, u32* allocator_id_counter);
+
 void sem_mark_type_as_function_value(Templated_Function* templated_function, Type* type, bool is_return_value);
 
 bool sem_add_allocator_id_connection(Allocator_Connection_Map* map, u32 allocator_id1, u32 allocator_id2, Ast* ast);
@@ -276,6 +278,8 @@ Allocator sem_allocator_parse(Ast* ast, Scope* scope);
 Struct_Field sem_struct_field_parse(Ast* ast, Struct_Field_List* other_feilds);
 
 void sem_add_struct(Ast* ast);
+
+bool sem_type_can_be_used_as_allocator(Type* type);
 
 Type sem_type_parse(Ast* ast, Allocator_Connection_Map* map, Scope* scope, u32* allocator_id_counter);
 

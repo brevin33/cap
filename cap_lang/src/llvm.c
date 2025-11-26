@@ -8,13 +8,15 @@ LLVM_Context llvm_context = {0};
 LLVMTypeRef llvm_get_type(Type* type) {
     if (type->ptr_count > 0) {
         type->ptr_count -= 1;
-        LLVMTypeRef ptr_type = llvm_get_type(type);
+        LLVMTypeRef ptr_type = LLVMIntType(8);
+        // LLVMTypeRef ptr_type = llvm_get_type(type);
         type->ptr_count += 1;
         return LLVMPointerType(ptr_type, 0);
     }
     if (type->is_ref) {
         type->is_ref = false;
-        LLVMTypeRef ref_type = llvm_get_type(type);
+        LLVMTypeRef ref_type = LLVMIntType(8);
+        // LLVMTypeRef ref_type = llvm_get_type(type);
         type->is_ref = true;
         return LLVMPointerType(ref_type, 0);
     }
@@ -228,7 +230,13 @@ LLVMValueRef llvm_build_expression_function_call(Expression* expression, LLVM_Sc
     }
 
     Templated_Function* templated_function = expression->function_call.templated_function;
-    LLVM_Function* llvm_function = llvm_get_function(templated_function, function, &expression->function_call.parameters, &expression->type);
+
+    Type parameters[expression->function_call.parameters.count];
+    for (u32 i = 0; i < expression->function_call.parameters.count; i++) {
+        Expression* parameter = Expression_List_get(&expression->function_call.parameters, i);
+        parameters[i] = parameter->type;
+    }
+    LLVM_Function* llvm_function = llvm_get_function(templated_function, function, parameters, expression->function_call.parameters.count, &expression->type);
 
     LLVMValueRef return_value = LLVMBuildCall2(llvm_context.builder, llvm_function->function_type, llvm_function->function_value, parameter_values, expression->function_call.parameters.count, "");
     return return_value;
@@ -292,9 +300,54 @@ LLVMValueRef llvm_build_expression_alloc(Expression* expression, LLVM_Scope* sco
         return LLVMBuildCall2(llvm_context.builder, llvm_context.malloc_function.function_type, llvm_context.malloc_function.function_value, &size_in_bytes_value, 1, "");
     }
 
-    (void)alignment_value;
-    massert(false, "not implemented");
-    return NULL;
+    massert((u64)allocator->variable >= 255, "should have found a valid allocator");
+
+    Variable* var = allocator->variable;
+    Type_Base* var_type_base = var->type.base;
+    Type var_type = var->type;
+    LLVMValueRef var_value = llvm_variable_to_llvm(scope, var);
+    if (var_type.ptr_count == 1) {
+        var_type.is_ref = false;
+        LLVMTypeRef llvm_type = llvm_get_type(&var_type);
+        var_value = LLVMBuildLoad2(llvm_context.builder, llvm_type, var_value, "");
+    } else {
+        var_type = sem_ptr_of_ref(&var_type);
+    }
+
+    Function* allocator_function = NULL;
+    for (u32 i = 0; i < cap_context.allocator_functions.count; i++) {
+        Function* function = *Function_Ptr_List_get(&cap_context.allocator_functions, i);
+        Type* first_parameter = &function->parameters.data[0].type;
+        Type_Base* function_allocator_type_base = first_parameter->base;
+        if (var_type_base == function_allocator_type_base) {
+            allocator_function = function;
+            break;
+        }
+    }
+    massert(allocator_function != NULL, "should have found a valid allocator function");
+    Templated_Function* templated_function = allocator_function->templated_functions.data[0];
+
+    Type* return_type = &expression->type;
+    Type return_type_unspecified = sem_type_make_allocator_unspecified(return_type, &templated_function->allocator_id_counter);
+    // TODO: some how get unspecified allocator on this
+
+    // TODO: get parameter for call
+
+    // make fake expression for allignment and size
+    Type parameters[3];
+    Type allocator_type = var->type;
+    parameters[0] = var_type;
+    parameters[1] = sem_get_uint_type(32, &templated_function->allocator_id_counter);
+    parameters[2] = sem_get_uint_type(64, &templated_function->allocator_id_counter);
+    LLVM_Function* llvm_function = llvm_get_function(templated_function, function, parameters, arr_length(parameters), &return_type_unspecified);
+
+    LLVMValueRef parameter_values[3];
+    parameter_values[0] = var_value;
+    parameter_values[1] = size_in_bytes_value;
+    parameter_values[2] = alignment_value;
+
+    LLVMValueRef call_value = LLVMBuildCall2(llvm_context.builder, llvm_function->function_type, llvm_function->function_value, parameter_values, arr_length(parameter_values), "");
+    return call_value;
 }
 
 LLVMValueRef llvm_build_expression_ptr(Expression* expression, LLVM_Scope* scope, LLVM_Function* function) {
@@ -615,7 +668,7 @@ static void llvm_add_type_allocator_llvm_type_to_list(Type* function_type, Type*
     }
 }
 
-LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Function* function_getting_this, Expression_List* parameters, Type* return_type) {
+LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Function* function_getting_this, Type* parameters, u32 param_count, Type* return_type) {
     // check if we have already compiled this function
     for (u32 i = 0; i < llvm_context.llvm_functions.count; i++) {
         LLVM_Function* function = LLVM_Function_List_get(&llvm_context.llvm_functions, i);
@@ -628,12 +681,11 @@ LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Fu
         bool allocators_match = true;
         for (u32 j = 0; j < function->templated_function->parameter_scope.variables.count; j++) {
             Variable* function_variable = *Variable_Ptr_List_get(&function->templated_function->parameter_scope.variables, j);
-            Expression* parameter = Expression_List_get(parameters, j);
 
             Type function_type = function_variable->type;
             function_type = sem_dereference_type(&function_type);
 
-            Type* parameter_type = &parameter->type;
+            Type* parameter_type = parameters + j;
             if (!llvm_type_match_for_allocator_function_call(&function_type, parameter_type, function, function_getting_this, false)) {
                 allocators_match = false;
                 break;
@@ -661,8 +713,7 @@ LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Fu
         Variable* variable = *Variable_Ptr_List_get(&templated_function->parameter_scope.variables, i);
         Type type = variable->type;
         type = sem_dereference_type(&type);
-        Expression* parameter = Expression_List_get(parameters, i);
-        Type* expression_type = &parameter->type;
+        Type* expression_type = parameters + i;
         llvm_add_type_allocator_llvm_type_to_list(&type, expression_type, &function, function_getting_this, false, &llvm_parameter_types);
     }
     llvm_add_type_allocator_llvm_type_to_list(&templated_function->return_type, return_type, &function, function_getting_this, true, NULL);

@@ -49,7 +49,6 @@ void sem_templated_function_implement(Templated_Function* templated_function, As
 Function* sem_function_prototype(Ast* ast) {
     massert(ast->kind == ast_function_declaration, "should have found a function declaration");
     Function* function = alloc(sizeof(Function));
-    Function_Ptr_List_add(&cap_context.functions, &function);
     function->ast = ast;
     u32 fake_allocator_id_counter = 0;
     function->return_type = sem_type_parse(ast->function_declaration.return_type, NULL, NULL, &fake_allocator_id_counter);
@@ -89,6 +88,40 @@ Function* sem_function_prototype(Ast* ast) {
         Templated_Function_Ptr_List_add(&function->templated_functions, &templated_function);
     }
 
+    if (strcmp(function->name, "alloc") == 0) {
+        if (function->is_template_function) {
+            log_error_ast(ast, "cannot template alloc function must fit this signature: void* alloc(MyAllocator* allocator, u64 size, u32 alignment)");
+            return function;
+        }
+        if (function->parameters.count != 3) {
+            log_error_ast(ast, "alloc function must fit this signature: void* alloc(MyAllocator* allocator, u64 size, u32 alignment)");
+            return function;
+        }
+        if (function->parameters.data[0].type.base->kind != type_struct && function->parameters.data[0].type.ptr_count != 1) {
+            log_error_ast(ast, "first parameter of alloc function must be a struct pointer");
+            return function;
+        }
+        Type* second_parm = &function->parameters.data[1].type;
+        Type_Kind second_parm_kind = sem_get_type_kind(second_parm);
+        u64 second_parm_bit_size = second_parm->base->number_bit_size;
+        if (second_parm_kind != type_uint && second_parm->ptr_count != 0 && second_parm_bit_size != 64) {
+            log_error_ast(ast, "second parameter of alloc function must be a u64");
+            return function;
+        }
+
+        Type* third_parm = &function->parameters.data[2].type;
+        Type_Kind third_parm_kind = sem_get_type_kind(third_parm);
+        u64 third_parm_bit_size = third_parm->base->number_bit_size;
+        if (third_parm_kind != type_uint && third_parm->ptr_count != 0 && third_parm_bit_size != 32) {
+            log_error_ast(ast, "third parameter of alloc function must be a u32");
+            return function;
+        }
+
+        Function_Ptr_List_add(&cap_context.allocator_functions, &function);
+        return function;
+    }
+
+    Function_Ptr_List_add(&cap_context.functions, &function);
     return function;
 }
 
@@ -180,6 +213,7 @@ Type_Base* sem_find_type_base(const char* name) {
 Allocator sem_allocator_parse(Ast* ast, Scope* scope) {
     massert(ast->kind == ast_allocator, "should have found an allocator");
     Variable* variable = sem_scope_get_variable(scope, ast->allocator.variable_name);
+    Type* variable_type = &variable->type;
     if (variable == NULL) {
         if (strcmp(ast->allocator.variable_name, "stack") == 0) {
             return STACK_ALLOCATOR;
@@ -187,6 +221,7 @@ Allocator sem_allocator_parse(Ast* ast, Scope* scope) {
         log_error_ast(ast, "could not find variable %s", ast->allocator.variable_name);
         return INVALID_ALLOCATOR;
     }
+    if (!sem_type_can_be_used_as_allocator(variable_type)) return INVALID_ALLOCATOR;
     if (ast->allocator.field_name != NULL) {
         massert(false, "not implemented");
     }
@@ -247,6 +282,29 @@ Struct_Field sem_struct_field_parse(Ast* ast, Struct_Field_List* other_feilds) {
     field_.type = type;
     field_.name = ast->struct_field.name;
     return field_;
+}
+
+bool sem_type_base_is_allocator(Type_Base* type_base) {
+    for (u32 i = 0; i < cap_context.allocator_functions.count; i++) {
+        Function* function = *Function_Ptr_List_get(&cap_context.allocator_functions, i);
+        Type* first_parameter = &function->parameters.data[0].type;
+        Type_Base* function_allocator_type_base = first_parameter->base;
+        if (type_base == function_allocator_type_base) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool sem_type_can_be_used_as_allocator(Type* type) {
+    Type_Kind type_kind_base = type->base->kind;
+    Type_Kind type_kind = sem_get_type_kind(type);
+    if (type_kind_base != type_struct) return false;
+    if (!sem_type_base_is_allocator(type->base)) return false;
+    if (type_kind == type_struct) return false;
+    if (type->ptr_count == 1) return true;
+    if (type->ptr_count == 0 && type->is_ref) return true;
+    return false;
 }
 
 void sem_add_struct(Ast* ast) {
@@ -1174,6 +1232,19 @@ bool sem_allocator_are_the_same(Allocator* allocator1, Allocator* allocator2) {
 
 bool sem_allocator_are_exactly_the_same(Allocator* allocator1, Allocator* allocator2) {
     return allocator1->variable == allocator2->variable && allocator1->used_for_alloc_or_free == allocator2->used_for_alloc_or_free && allocator1->is_function_value == allocator2->is_function_value && allocator1->scope == allocator2->scope;
+}
+
+Type sem_type_make_allocator_unspecified(Type* type, u32* allocator_id_counter) {
+    Type new_type = sem_copy_type(type);
+    new_type.base_allocator_id = *allocator_id_counter;
+    *allocator_id_counter += 1;
+    new_type.ref_allocator_id = *allocator_id_counter;
+    *allocator_id_counter += 1;
+    for (u32 i = 0; i < new_type.ptr_count; i++) {
+        new_type.ptr_allocator_ids[i] = *allocator_id_counter;
+        *allocator_id_counter += 1;
+    }
+    return new_type;
 }
 
 void sem_mark_type_as_function_value(Templated_Function* templated_function, Type* type, bool is_return_value) {

@@ -1,19 +1,24 @@
 
 struct Foo{
+	i32 val
+}
+
+struct Point{
 	i32* x
 	i32* y
 }
 
-void* alloc(u64 size, u32 alignment){
+void* alloc(Foo* foo, u64 size, u32 alignment){
 	return alloc(size, alignment)
 }
 
 program test_program{
-	Foo f
+	Foo@stack f
 	i32*@f x = alloc(i32)
-	f.x = x
-	f.y = alloc(i32)
-	f.x* = 10
-	f.y* = 20
-	return f.y*
+	Point p
+	p.x = alloc(i32)
+	p.y = alloc(i32)
+	p.x* = 10
+	p.y* = 20
+	return p.y*
 }

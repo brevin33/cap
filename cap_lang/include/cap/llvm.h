@@ -62,7 +62,7 @@ LLVMValueRef llvm_variable_to_llvm(LLVM_Scope* scope, Variable* variable);
 
 void llvm_store_variable_llvm_value(LLVM_Scope* scope, Variable* variable, LLVMValueRef value);
 
-LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Function* function_getting_this, Expression_List* parameters, Type* return_type);
+LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Function* function_getting_this, Type* parameters, u32 param_count, Type* return_type);
 
 bool llvm_build_statement(Statement* statement, LLVM_Scope* scope, LLVM_Function* function);
 

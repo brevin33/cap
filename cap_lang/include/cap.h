@@ -12,6 +12,7 @@ typedef struct Cap_Context {
     Project_Ptr_List projects;
     Type_Base_Ptr_List types;
     Function_Ptr_List functions;
+    Function_Ptr_List allocator_functions;
     u64 error_count;
     bool log_errors;
 } Cap_Context;

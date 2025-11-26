@@ -34,6 +34,7 @@ bool ast_can_interpret_as_type(Token** token_start) {
     Token* token = *token_start;
     if (token->type != tt_id) return false;
     token++;
+    ast_can_interpret_as_allocator(&token);
 
     while (true) {
         if (token->type == tt_mul) {
