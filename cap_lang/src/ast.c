@@ -840,6 +840,17 @@ Ast ast_function_call_parse(Token** tokens) {
     ast.function_call.name = token_get_id(token);
     token++;
 
+    // optional so disable errors
+    cap_context.log_errors = false;
+    Ast allocator = ast_allocator_parse(&token);
+    if (allocator.kind == ast_invalid) {
+        ast.function_call.allocator = NULL;
+    } else {
+        *ast.function_call.allocator = allocator;
+        ast.function_call.allocator = alloc(sizeof(Ast));
+    }
+    cap_context.log_errors = true;
+
     ast.function_call.parameters = alloc(sizeof(Ast));
     *ast.function_call.parameters = ast_function_call_parameter_parse(&token);
     if (ast.function_call.parameters->kind == ast_invalid) return ast;
@@ -940,6 +951,16 @@ Ast ast_alloc_parse(Token** tokens) {
     if (parameter_list.kind == ast_invalid) return parameter_list;
     ast.alloc.parameters = alloc(sizeof(Ast));
     *ast.alloc.parameters = parameter_list;
+
+    cap_context.log_errors = false;
+    Ast allocator = ast_allocator_parse(&token);
+    if (allocator.kind == ast_invalid) {
+        ast.alloc.allocator = NULL;
+    } else {
+        *ast.alloc.allocator = allocator;
+        ast.alloc.allocator = alloc(sizeof(Ast));
+    }
+    cap_context.log_errors = true;
 
     ast.num_tokens = token - *tokens;
     *tokens = token;

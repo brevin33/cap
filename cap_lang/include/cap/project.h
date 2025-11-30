@@ -23,3 +23,5 @@ File* file_create(const char* path);
 u32 file_get_line_of_index(File* file, u32 index);
 
 u32 file_get_front_of_line(File* file, u32 line);
+
+void project_validate_function_call_allocators(Project* project);

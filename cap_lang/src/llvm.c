@@ -236,7 +236,12 @@ LLVMValueRef llvm_build_expression_function_call(Expression* expression, LLVM_Sc
         Expression* parameter = Expression_List_get(&expression->function_call.parameters, i);
         parameters[i] = parameter->type;
     }
-    LLVM_Function* llvm_function = llvm_get_function(templated_function, function, parameters, expression->function_call.parameters.count, &expression->type);
+
+    Allocator base_allocator = C_ALLOCATOR;
+    if (expression->function_call.allocator != NULL) {
+        base_allocator = *expression->function_call.allocator;
+    }
+    LLVM_Function* llvm_function = llvm_get_function(templated_function, function, parameters, arr_length(parameters), &expression->type, &base_allocator);
 
     LLVMValueRef return_value = LLVMBuildCall2(llvm_context.builder, llvm_function->function_type, llvm_function->function_value, parameter_values, expression->function_call.parameters.count, "");
     return return_value;
@@ -251,8 +256,7 @@ LLVMValueRef llvm_build_expression_alloc(Expression* expression, LLVM_Scope* sco
 
     massert(expression->type.ptr_count > 0, "should have found a pointer");
     u32 expression_allocator_id = expression->type.ptr_allocator_ids[expression->type.ptr_count - 1];
-    Allocator* allocator = sem_allocator_get(&function->allocator_connection_map, expression_allocator_id);
-
+    Allocator allocator = *llvm_get_allocator(function, expression_allocator_id);
     if (expression->alloc.is_type_alloc) {
         Type* type_to_alloc = &expression->alloc.type_or_count->expression_type.type;
         llvm_type = llvm_get_type(type_to_alloc);
@@ -270,7 +274,8 @@ LLVMValueRef llvm_build_expression_alloc(Expression* expression, LLVM_Scope* sco
         alignment_value = llvm_build_expression(expression->alloc.count_or_allignment, scope, function);
     }
 
-    if (sem_allocator_are_the_same(allocator, &STACK_ALLOCATOR)) {
+    massert(!sem_allocator_are_the_same(&allocator, &UNSPECIFIED_ALLOCATOR), "should not be unspecified at this point");
+    if (sem_allocator_are_the_same(&allocator, &STACK_ALLOCATOR)) {
         if (expression->alloc.is_type_alloc) {
             if (count_value != NULL) {
                 return LLVMBuildArrayAlloca(llvm_context.builder, llvm_type, count_value, "stack_alloc");
@@ -296,13 +301,14 @@ LLVMValueRef llvm_build_expression_alloc(Expression* expression, LLVM_Scope* sco
             return aligned_alloc;
         }
     }
-    if (sem_allocator_are_the_same(allocator, &UNSPECIFIED_ALLOCATOR)) {
+
+    if (sem_allocator_are_the_same(&allocator, &C_ALLOCATOR)) {
         return LLVMBuildCall2(llvm_context.builder, llvm_context.malloc_function.function_type, llvm_context.malloc_function.function_value, &size_in_bytes_value, 1, "");
     }
 
-    massert((u64)allocator->variable >= 255, "should have found a valid allocator");
+    massert((u64)allocator.variable >= 255, "should have found a valid allocator");
 
-    Variable* var = allocator->variable;
+    Variable* var = allocator.variable;
     Type_Base* var_type_base = var->type.base;
     Type var_type = var->type;
     LLVMValueRef var_value = llvm_variable_to_llvm(scope, var);
@@ -339,7 +345,8 @@ LLVMValueRef llvm_build_expression_alloc(Expression* expression, LLVM_Scope* sco
     parameters[0] = var_type;
     parameters[1] = sem_get_uint_type(32, &templated_function->allocator_id_counter);
     parameters[2] = sem_get_uint_type(64, &templated_function->allocator_id_counter);
-    LLVM_Function* llvm_function = llvm_get_function(templated_function, function, parameters, arr_length(parameters), &return_type_unspecified);
+    Allocator* function_base_allocator = llvm_get_allocator(function, var_type.base_allocator_id);
+    LLVM_Function* llvm_function = llvm_get_function(templated_function, function, parameters, arr_length(parameters), &return_type_unspecified, function_base_allocator);
 
     LLVMValueRef parameter_values[3];
     parameter_values[0] = var_value;
@@ -348,6 +355,15 @@ LLVMValueRef llvm_build_expression_alloc(Expression* expression, LLVM_Scope* sco
 
     LLVMValueRef call_value = LLVMBuildCall2(llvm_context.builder, llvm_function->function_type, llvm_function->function_value, parameter_values, arr_length(parameter_values), "");
     return call_value;
+}
+
+Allocator* llvm_get_allocator(LLVM_Function* function, u32 allocator_id) {
+    Allocator* allocator = sem_allocator_get(&function->allocator_connection_map, allocator_id);
+    if (sem_allocator_are_the_same(allocator, &UNSPECIFIED_ALLOCATOR)) {
+        allocator = &function->base_allocator;
+    }
+    massert(!sem_allocator_are_the_same(allocator, &UNSPECIFIED_ALLOCATOR), "should not be unspecified at this point");
+    return allocator;
 }
 
 LLVMValueRef llvm_build_expression_ptr(Expression* expression, LLVM_Scope* scope, LLVM_Function* function) {
@@ -577,7 +593,6 @@ bool llvm_build_statement(Statement* statement, LLVM_Scope* scope, LLVM_Function
 
 static bool llvm_allocator_id_match_for_allocator_function_call(u32 function_allocator_id, u32 parameter_allocator_id, LLVM_Function* function, LLVM_Function* parameter_function) {
     Allocator* function_allocator = sem_allocator_get(&function->allocator_connection_map, function_allocator_id);
-    massert(function_allocator->is_function_value, "should have found a function value");
     if (!function_allocator->used_for_alloc_or_free) return true;
 
     Allocator* parameter_allocator = sem_allocator_get(&parameter_function->allocator_connection_map, parameter_allocator_id);
@@ -623,28 +638,24 @@ static bool llvm_type_match_for_allocator_function_call(Type* function_type, Typ
 
 static void llvm_add_id_allocator_llvm_type_to_list(u32 function_allocator_id, u32 parameter_allocator_id, LLVM_Function* function, LLVM_Function* parameter_function, bool is_return_value, LLVMTypeRef_List* list_to_add_to) {
     Allocator* function_allocator = sem_allocator_get(&function->allocator_connection_map, function_allocator_id);
-    if (function_allocator->is_function_value) {
-        Allocator* parameter_allocator = sem_allocator_get(&parameter_function->allocator_connection_map, parameter_allocator_id);
-        Variable* function_allocator_variable = function_allocator->variable;
-        Variable* parameter_allocator_variable = parameter_allocator->variable;
-        if ((u64)parameter_allocator_variable <= 255) {
-            Allocator new_allocator = {0};
-            new_allocator.variable = parameter_allocator_variable;
-            new_allocator.used_for_alloc_or_free = true;
-            new_allocator.is_function_value = true;
-            sem_set_allocator(&function->allocator_connection_map, function_allocator_id, &new_allocator);
-        } else {
-            Allocator new_allocator = {0};
-            Variable* new_variable = alloc(sizeof(Variable));
-            *new_variable = *parameter_allocator_variable;
-            new_allocator.variable = new_variable;
-            new_allocator.used_for_alloc_or_free = true;
-            new_allocator.is_function_value = true;
-            sem_set_allocator(&function->allocator_connection_map, function_allocator_id, &new_allocator);
-            Type* parameter_variable_type = &parameter_allocator_variable->type;
-            LLVMTypeRef llvm_parameter_variable_type = llvm_get_type(parameter_variable_type);
-            if (list_to_add_to != NULL) LLVMTypeRef_List_add(list_to_add_to, &llvm_parameter_variable_type);
-        }
+    Allocator* parameter_allocator = sem_allocator_get(&parameter_function->allocator_connection_map, parameter_allocator_id);
+    Variable* function_allocator_variable = function_allocator->variable;
+    Variable* parameter_allocator_variable = parameter_allocator->variable;
+    if ((u64)parameter_allocator_variable <= 255) {
+        Allocator new_allocator = {0};
+        new_allocator.variable = parameter_allocator_variable;
+        new_allocator.used_for_alloc_or_free = true;
+        sem_set_allocator(&function->allocator_connection_map, function_allocator_id, &new_allocator);
+    } else {
+        Allocator new_allocator = {0};
+        Variable* new_variable = alloc(sizeof(Variable));
+        *new_variable = *parameter_allocator_variable;
+        new_allocator.variable = new_variable;
+        new_allocator.used_for_alloc_or_free = true;
+        sem_set_allocator(&function->allocator_connection_map, function_allocator_id, &new_allocator);
+        Type* parameter_variable_type = &parameter_allocator_variable->type;
+        LLVMTypeRef llvm_parameter_variable_type = llvm_get_type(parameter_variable_type);
+        if (list_to_add_to != NULL) LLVMTypeRef_List_add(list_to_add_to, &llvm_parameter_variable_type);
     }
 }
 
@@ -668,10 +679,13 @@ static void llvm_add_type_allocator_llvm_type_to_list(Type* function_type, Type*
     }
 }
 
-LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Function* function_getting_this, Type* parameters, u32 param_count, Type* return_type) {
+LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Function* function_getting_this,
+                                 Type* parameters, u32 param_count, Type* return_type, Allocator* base_allocator) {
     // check if we have already compiled this function
     for (u32 i = 0; i < llvm_context.llvm_functions.count; i++) {
         LLVM_Function* function = LLVM_Function_List_get(&llvm_context.llvm_functions, i);
+
+        if (!sem_allocator_are_the_same(&function->base_allocator, base_allocator)) continue;
 
         if (function->templated_function != templated_function) continue;
 
@@ -697,6 +711,7 @@ LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Fu
     }
 
     LLVM_Function function = {0};
+    function.base_allocator = *base_allocator;
     function.allocator_connection_map = sem_copy_allocator_connection_map(&templated_function->allocator_connection_map);
 
     LLVMTypeRef llvm_return_type = llvm_get_type(&templated_function->return_type);
@@ -776,6 +791,7 @@ void llvm_compile_program(Program* program, char* build_dir) {
 
     LLVMBasicBlockRef entry_block = LLVMAppendBasicBlock(function_value, "entry");
     LLVM_Function function = {0};
+    function.base_allocator = C_ALLOCATOR;
     function.function_type = function_type;
     function.function_value = function_value;
     function.templated_function = program->body.templated_functions.data[0];

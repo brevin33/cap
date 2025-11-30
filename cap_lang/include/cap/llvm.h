@@ -35,6 +35,7 @@ typedef struct LLVM_Function {
     LLVMTypeRef function_type;
     Templated_Function* templated_function;
     Allocator_Connection_Map allocator_connection_map;
+    Allocator base_allocator;
 } LLVM_Function;
 
 typedef struct LLVM_Context {
@@ -62,7 +63,8 @@ LLVMValueRef llvm_variable_to_llvm(LLVM_Scope* scope, Variable* variable);
 
 void llvm_store_variable_llvm_value(LLVM_Scope* scope, Variable* variable, LLVMValueRef value);
 
-LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Function* function_getting_this, Type* parameters, u32 param_count, Type* return_type);
+LLVM_Function* llvm_get_function(Templated_Function* templated_function, LLVM_Function* function_getting_this,
+                                 Type* parameters, u32 param_count, Type* return_type, Allocator* base_allocator);
 
 bool llvm_build_statement(Statement* statement, LLVM_Scope* scope, LLVM_Function* function);
 
@@ -103,3 +105,5 @@ LLVMValueRef llvm_build_expression_struct_access(Expression* expression, LLVM_Sc
 char* llvm_evaluate_const_int(Expression* expression);
 
 double llvm_evaluate_const_float(Expression* expression);
+
+Allocator* llvm_get_allocator(LLVM_Function* function, u32 allocator_id);

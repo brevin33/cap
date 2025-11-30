@@ -46,6 +46,7 @@ create_list_headers(LLVM_Function_List, LLVM_Function);
 
 typedef struct Expression Expression;
 create_list_headers(Expression_List, Expression);
+create_list_headers(Expression_Ptr_List, Expression *);
 
 typedef struct LLVMOpaqueType *LLVMTypeRef;
 create_list_headers(LLVMTypeRef_List, LLVMTypeRef);

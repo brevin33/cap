@@ -68,6 +68,7 @@ typedef struct Ast_Struct_Field {
 
 typedef struct Ast_Alloc {
     Ast* parameters;
+    Ast* allocator;
 } Ast_Alloc;
 
 typedef struct Ast_Biop {
@@ -98,6 +99,7 @@ typedef struct Ast_Type {
 typedef struct Ast_Function_Call {
     char* name;
     Ast* parameters;
+    Ast* allocator;
 } Ast_Function_Call;
 
 typedef struct Ast_Function_Call_Parameter {

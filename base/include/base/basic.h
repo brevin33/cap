@@ -83,6 +83,8 @@ bool make_directory(const char* path);
 
 bool is_power_of_two(u64 number);
 
+double get_time();
+
 #define CASE_NUMBER \
     case '0':       \
     case '1':       \

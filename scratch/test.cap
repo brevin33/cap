@@ -12,13 +12,26 @@ void* alloc(Foo* foo, u64 size, u32 alignment){
 	return alloc(size, alignment)
 }
 
+
 program test_program{
-	Foo@stack f
-	i32*@f x = alloc(i32)
+	Foo@stack base_foo
+	Foo foo
+	i32*@foo x = alloc(i32)
 	Point p
 	p.x = alloc(i32)
 	p.y = alloc(i32)
 	p.x* = 10
 	p.y* = 20
 	return p.y*
+}
+
+i32* test(i32* x){
+	return x
+}
+
+program test_program_2{
+	i32*@stack x = alloc(i32)
+	i32* y = test(x)
+	y = alloc(i32)
+	return 0
 }

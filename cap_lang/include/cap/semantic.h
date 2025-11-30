@@ -92,6 +92,7 @@ typedef struct Expression_Struct_Access {
 typedef struct Expression_Function_Call {
     Expression_List parameters;
     Templated_Function* templated_function;
+    Allocator* allocator;
 } Expression_Function_Call;
 
 typedef struct Expression_Type {
@@ -205,20 +206,22 @@ typedef struct Allocator {
     Variable* variable;
     Scope* scope;
     bool used_for_alloc_or_free;
-    bool is_function_value;
 } Allocator;
 
 #define UNSPECIFIED_ALLOCATOR \
-    (Allocator) { .variable = NULL, .scope = NULL, .used_for_alloc_or_free = false, .is_function_value = false }
+    (Allocator) { .variable = NULL, .scope = NULL, .used_for_alloc_or_free = false }
 
 #define STACK_ALLOCATOR \
-    (Allocator) { .variable = (Variable*)1, .scope = NULL, .used_for_alloc_or_free = false, .is_function_value = false }
+    (Allocator) { .variable = (Variable*)1, .scope = NULL, .used_for_alloc_or_free = false }
 
 // #define LOOSE_ALLOCATOR \
 //     (Allocator) { .variable = (Variable*)2, .used_for_alloc_or_free = false, .is_function_value = false }
 
 #define INVALID_ALLOCATOR \
-    (Allocator) { .variable = (Variable*)2, .used_for_alloc_or_free = false, .is_function_value = false }
+    (Allocator) { .variable = (Variable*)2, .used_for_alloc_or_free = false }
+
+#define C_ALLOCATOR \
+    (Allocator) { .variable = (Variable*)3, .scope = NULL, .used_for_alloc_or_free = false }
 
 typedef struct Allocator_Connection_Map {
     Allocator_List allocators;
@@ -232,6 +235,7 @@ typedef struct Templated_Function {
     Scope parameter_scope;
     u32 allocator_id_counter;
     Allocator_Connection_Map allocator_connection_map;
+    Expression_List function_call_expression;
 } Templated_Function;
 
 typedef struct Function {
@@ -261,9 +265,9 @@ void sem_templated_function_implement(Templated_Function* function, Ast* scope_a
 
 Type sem_type_make_allocator_unspecified(Type* type, u32* allocator_id_counter);
 
-void sem_mark_type_as_function_value(Templated_Function* templated_function, Type* type, bool is_return_value);
+void sem_mark_type_as_function_value(Templated_Function* templated_function, Type* type);
 
-bool sem_add_allocator_id_connection(Allocator_Connection_Map* map, u32 allocator_id1, u32 allocator_id2, Ast* ast);
+bool sem_add_allocator_id_connection(Allocator_Connection_Map* map, u32 allocator_id1, u32 allocator_id2, Ast* ast, bool* changed);
 
 void sem_set_allocator(Allocator_Connection_Map* map, u32 allocator_id, Allocator* allocator);
 
@@ -274,6 +278,8 @@ bool sem_allocator_are_the_same(Allocator* allocator1, Allocator* allocator2);
 bool sem_allocator_are_exactly_the_same(Allocator* allocator1, Allocator* allocator2);
 
 Allocator sem_allocator_parse(Ast* ast, Scope* scope);
+
+Scope* sem_variable_to_scope_in(Scope* scope, Variable* variable);
 
 Struct_Field sem_struct_field_parse(Ast* ast, Struct_Field_List* other_feilds);
 
@@ -347,7 +353,7 @@ Expression sem_expression_type_size_parse(Ast* ast, Scope* scope, Templated_Func
 
 Expression sem_expression_type_align_parse(Ast* ast, Scope* scope, Templated_Function* templated_function, Expression* type);
 
-Expression sem_function_call(char* name, Expression_List* parameters, Ast* ast, Templated_Function* calling_templated_function);
+Expression sem_function_call(char* name, Expression_List* parameters, Ast* ast, Templated_Function* calling_templated_function, Allocator* allocator);
 
 Expression sem_expression_struct_access_parse(Ast* ast, Scope* scope, Templated_Function* templated_function, Expression* struct_expr);
 
@@ -375,6 +381,10 @@ bool sem_type_is_equal_without_allocator_id(Type* type1, Type* type2);
 
 bool sem_base_allocator_matters(Type* type);
 
+bool sem_allocator_id_are_connected(u32 allocator_id1, u32 allocator_id2, Allocator_Connection_Map* map);
+
 Type_Kind sem_get_type_kind(Type* type);
 
 Allocator_Connection_Map sem_copy_allocator_connection_map(Allocator_Connection_Map* map);
+
+u32 sem_get_new_allocator_id(u32* allocator_id_counter);

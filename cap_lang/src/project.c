@@ -1,4 +1,6 @@
 #include "cap.h"
+#include "cap/lists.h"
+#include "cap/semantic.h"
 
 Project* project_create(const char* dir_path) {
     init_cap_context();
@@ -114,6 +116,177 @@ void project_semantic_analysis(Project* project) {
             for (u64 k = 0; k < function->templated_functions.count; k++) {
                 Templated_Function* templated_function = *Templated_Function_Ptr_List_get(&function->templated_functions, k);
                 sem_templated_function_implement(templated_function, function->ast->function_declaration.body);
+            }
+        }
+    }
+
+    project_validate_function_call_allocators(project);
+}
+
+static bool _project_connectup_id_allocators_to_function_id(u32 calling_id, u32 called_id_match_calling, u32 called_id, u32 calling_id_match_called,
+                                                            Templated_Function* called_function, Templated_Function* calling_function, Ast* ast) {
+    bool changed = false;
+    if (sem_allocator_id_are_connected(called_id_match_calling, called_id, &called_function->allocator_connection_map)) {
+        sem_add_allocator_id_connection(&calling_function->allocator_connection_map, calling_id, calling_id_match_called, ast, &changed);
+    }
+    return changed;
+}
+
+static bool _project_connectup_id_allocators_to_function_type(u32 calling_id, u32 called_id_match_calling, Type* called_type, Type* called_type_match_calling,
+                                                              Templated_Function* called_function, Templated_Function* calling_function, Ast* ast) {
+    bool changed = false;
+    if (sem_base_allocator_matters(called_type)) {
+        bool change_here =
+            _project_connectup_id_allocators_to_function_id(calling_id, called_id_match_calling, called_type->base_allocator_id,
+                                                            called_type_match_calling->base_allocator_id, called_function, calling_function, ast);
+        changed = changed || change_here;
+    }
+    for (u32 i = 0; i < called_type->ptr_count; i++) {
+        bool change_here =
+            _project_connectup_id_allocators_to_function_id(calling_id, called_id_match_calling, called_type->ptr_allocator_ids[i],
+                                                            called_type_match_calling->ptr_allocator_ids[i], called_function, calling_function, ast);
+        changed = changed || change_here;
+    }
+    return changed;
+}
+
+static bool _project_connectup_id_allocators_to_function(u32 calling_id, u32 called_id_match_calling, Templated_Function* called_function,
+                                                         Templated_Function* calling_function, Expression* call_expression, Ast* ast) {
+    Scope* called_parameter_scope = &called_function->parameter_scope;
+    bool changed = false;
+    for (u64 j = 0; j < called_parameter_scope->variables.count; j++) {
+        Variable* called_parameter = *Variable_Ptr_List_get(&called_parameter_scope->variables, j);
+        Type called_parameter_type = called_parameter->type;
+        called_parameter_type = sem_dereference_type(&called_parameter_type);
+
+        Expression* calling_parameter = &call_expression->function_call.parameters.data[j];
+        Type calling_parameter_type = calling_parameter->type;
+
+        bool change_here = _project_connectup_id_allocators_to_function_type(calling_id, called_id_match_calling, &called_parameter_type,
+                                                                             &calling_parameter_type, called_function, calling_function, ast);
+        changed = changed || change_here;
+    }
+
+    Type* called_return_type = &called_function->return_type;
+    Type* expression_return_type = &call_expression->type;
+    bool change_here = _project_connectup_id_allocators_to_function_type(calling_id, called_id_match_calling, called_return_type, expression_return_type,
+                                                                         called_function, calling_function, ast);
+    changed = changed || change_here;
+
+    return changed;
+}
+
+static bool _project_connectup_type_allocators_to_function(Type* type, Type* called_type_match_calling, Templated_Function* called_function,
+                                                           Templated_Function* calling_function, Expression* call_expression, Ast* ast) {
+    bool changed = false;
+    if (sem_base_allocator_matters(type)) {
+        u32 allocator_id = type->base_allocator_id;
+        u32 called_id_match_calling = called_type_match_calling->base_allocator_id;
+        bool change_here =
+            _project_connectup_id_allocators_to_function(allocator_id, called_id_match_calling, called_function, calling_function, call_expression, ast);
+        changed = changed || change_here;
+    }
+    for (u32 i = 0; i < type->ptr_count; i++) {
+        u32 allocator_id = type->ptr_allocator_ids[i];
+        u32 called_id_match_calling = called_type_match_calling->ptr_allocator_ids[i];
+        bool change_here =
+            _project_connectup_id_allocators_to_function(allocator_id, called_id_match_calling, called_function, calling_function, call_expression, ast);
+        changed = changed || change_here;
+    }
+    return changed;
+}
+
+static bool _project_connectup_expression_list_allocators_to_function(Expression* call_expression, Templated_Function* calling_function) {
+    massert(call_expression->kind == expression_function_call, "should have found a function call");
+    Expression_List parameters = call_expression->function_call.parameters;
+    Templated_Function* called_function = call_expression->function_call.templated_function;
+    Scope* called_parameter_scope = &called_function->parameter_scope;
+    bool changed = false;
+    for (u64 i = 0; i < parameters.count; i++) {
+        Expression* calling_parameter = Expression_List_get(&parameters, i);
+        Type calling_parameter_type = calling_parameter->type;
+
+        Variable* called_scope_var = *Variable_Ptr_List_get(&called_parameter_scope->variables, i);
+        Type called_scope_var_type = called_scope_var->type;
+        called_scope_var_type = sem_dereference_type(&called_scope_var_type);
+
+        bool changed_here = _project_connectup_type_allocators_to_function(&calling_parameter_type, &called_scope_var_type, called_function, calling_function,
+                                                                           call_expression, call_expression->ast);
+        changed = changed || changed_here;
+    }
+
+    Type* called_return_type = &called_function->return_type;
+    Type expression_return_type = call_expression->type;
+    bool change_here = _project_connectup_type_allocators_to_function(&expression_return_type, called_return_type, called_function, calling_function,
+                                                                      call_expression, call_expression->ast);
+    changed = changed || change_here;
+
+    return changed;
+}
+
+void project_validate_function_call_allocators(Project* project) {
+    bool changed = true;
+    Expression_Ptr_List error_expressions = {0};
+    while (changed) {
+        changed = false;
+        for (u64 i = 0; i < project->files.count; i++) {
+            File* file = *File_Ptr_List_get(&project->files, i);
+            for (u64 j = 0; j < file->functions.count; j++) {
+                Function* function = *Function_Ptr_List_get(&file->functions, j);
+                for (u64 k = 0; k < function->templated_functions.count; k++) {
+                    Templated_Function* calling_function = *Templated_Function_Ptr_List_get(&function->templated_functions, k);
+                    Expression_List function_call_expression = calling_function->function_call_expression;
+                    for (u64 l = 0; l < function_call_expression.count; l++) {
+                        Expression* expression = Expression_List_get(&function_call_expression, l);
+
+                        bool already_found_error = false;
+                        for (u64 m = 0; m < error_expressions.count; m++) {
+                            Expression* error_expression = *Expression_Ptr_List_get(&error_expressions, m);
+                            already_found_error = already_found_error || error_expression == expression;
+                        }
+                        if (already_found_error) continue;
+
+                        u64 num_errors_pre = cap_context.error_count;
+                        bool c = _project_connectup_expression_list_allocators_to_function(expression, calling_function);
+                        changed = changed || c;
+                        u64 num_errors_post = cap_context.error_count;
+                        bool error = num_errors_post > num_errors_pre;
+                        if (error) {
+                            Expression_Ptr_List_add(&error_expressions, &expression);
+                        }
+                    }
+                }
+            }
+        }
+
+        for (u64 i = 0; i < project->files.count; i++) {
+            File* file = *File_Ptr_List_get(&project->files, i);
+            for (u64 j = 0; j < file->programs.count; j++) {
+                Program* program = file->programs.data[j];
+                Function* function = &program->body;
+                for (u64 k = 0; k < function->templated_functions.count; k++) {
+                    Templated_Function* calling_function = *Templated_Function_Ptr_List_get(&function->templated_functions, k);
+                    Expression_List function_call_expression = calling_function->function_call_expression;
+                    for (u64 l = 0; l < function_call_expression.count; l++) {
+                        Expression* expression = Expression_List_get(&function_call_expression, l);
+
+                        bool already_found_error = false;
+                        for (u64 m = 0; m < error_expressions.count; m++) {
+                            Expression* error_expression = *Expression_Ptr_List_get(&error_expressions, m);
+                            already_found_error = already_found_error || error_expression == expression;
+                        }
+                        if (already_found_error) continue;
+
+                        u64 num_errors_pre = cap_context.error_count;
+                        bool c = _project_connectup_expression_list_allocators_to_function(expression, calling_function);
+                        changed = changed || c;
+                        u64 num_errors_post = cap_context.error_count;
+                        bool error = num_errors_post > num_errors_pre;
+                        if (error) {
+                            Expression_Ptr_List_add(&error_expressions, &expression);
+                        }
+                    }
+                }
             }
         }
     }

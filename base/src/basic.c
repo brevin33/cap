@@ -8,12 +8,31 @@
 #include <unistd.h>
 #endif
 
+#include <time.h>
+
 void print_until_delimiter(const char* input, char delimiter) {
     while (*input != '\0' && *input != delimiter) {
         printf("%c", *input);
         input++;
     }
 }
+
+#if defined(_WIN32)
+#include <windows.h>
+double get_time() {
+    LARGE_INTEGER freq, counter;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&counter);
+    return (double)counter.QuadPart / (double)freq.QuadPart;
+}
+#else
+#include <time.h>
+double get_time() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+#endif
 
 bool link_obj_to_exe(const char* obj_path, const char* exe_path) {
     char buffer[512 * 8];
