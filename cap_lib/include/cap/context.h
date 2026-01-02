@@ -8,6 +8,7 @@ typedef struct Cap_Context Cap_Context;
 
 struct Cap_Context {
     Arena arena;
+    bool log;
 };
 
 extern Cap_Context cap_context;

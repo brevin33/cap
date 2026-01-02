@@ -4,7 +4,7 @@ String filesystem_read_file(String path) {
     FILE* file = fopen(path.data, "rb");
     if (file == NULL) {
         char buffer[4096];
-        sprintf(buffer, "Failed to open file: %s", path.data);
+        sprintf(buffer, "Failed to open file: %.*s", str_info(path));
         String msg = string_create(buffer, strlen(buffer));
         mabort(msg);
     }

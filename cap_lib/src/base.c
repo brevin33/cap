@@ -7,4 +7,6 @@ void* cap_alloc(u64 size) {
     return arena_alloc(arena, size);
 }
 
-void cap_init() { cap_context.arena = arena_create(1024 * 1024, NULL); }
+void cap_init() {
+    cap_context.arena = arena_create(1024 * 1024, NULL);
+}

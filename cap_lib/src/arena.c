@@ -31,6 +31,7 @@ Arena arena_create(u64 block_size, Arena* allocator) {
 }
 
 void* arena_alloc(Arena* arena, u64 size) {
+    size = (size + 7) & ~7;
     Arena_Block* block = arena->current;
     u8* data = block->current;
     block->current += size;

@@ -3,20 +3,23 @@
 #include "cap/base.h"
 #include "cap/token.h"
 
-void log_error(char* message, ...);
+typedef struct Cap_File Cap_File;
+typedef struct Ast Ast;
 
-void log_error_token(Tokens tokens, Token token, char* message, ...);
+void log_error(const char* message, ...);
+void log_error_token(Cap_File* file, Token token, const char* message, ...);
+void log_error_ast(Cap_File* file, Ast* ast, const char* message, ...);
 
-void log_warning(char* message, ...);
+void log_warning(const char* message, ...);
+void log_warning_token(Cap_File* file, Token token, const char* message, ...);
+void log_warning_ast(Cap_File* file, Ast* ast, const char* message, ...);
 
-void log_warning_token(Tokens tokens, Token token, char* message, ...);
+void log_info(const char* message, ...);
+void log_info_token(Cap_File* file, Token token, const char* message, ...);
+void log_info_ast(Cap_File* file, Ast* ast, const char* message, ...);
 
-void log_info(char* message, ...);
+void log_success(const char* message, ...);
+void log_success_token(Cap_File* file, Token token, const char* message, ...);
+void log_success_ast(Cap_File* file, Ast* ast, const char* message, ...);
 
-void log_info_token(Tokens tokens, Token token, char* message, ...);
-
-void log_success(char* message, ...);
-
-void log_success_token(Tokens tokens, Token token, char* message, ...);
-
-void log_chunk(char* message, va_list args, String file_content, String substring);
+void _log_chunk(const char* message, va_list args, Cap_File* file, String substring);
