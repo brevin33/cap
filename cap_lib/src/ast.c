@@ -1,14 +1,11 @@
-#include "cap/ast.h"
-
 #include "cap.h"
-#include "cap/context.h"
-#include "cap/token.h"
 
 Ast ast_parse_program(Tokens tokens, u64* i, Cap_File* file) {
     u64 tid = *i;
     Ast ast = {0};
     ast.kind = ast_program;
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
 
     token_next(tokens, &tid);
     Token token = token_get(tokens, &tid);
@@ -30,6 +27,7 @@ Ast ast_function_scope_parse(Tokens tokens, u64* i, Cap_File* file) {
     Ast ast = {0};
     ast.kind = ast_function_scope;
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
 
     Token token = token_get(tokens, &tid);
     ast_expect(token, token_begin_scope, file);
@@ -97,6 +95,7 @@ Ast ast_variable_parse(Tokens tokens, u64* i, Cap_File* file) {
     Ast ast = {0};
     ast.kind = ast_variable;
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
 
     Token token = token_get(tokens, &tid);
     ast_expect(token, token_identifier, file);
@@ -118,6 +117,7 @@ Ast ast_expression_value_parse_float(Tokens tokens, u64* i, Cap_File* file) {
     Ast ast = {0};
     ast.kind = ast_float;
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
 
     Token token = token_get(tokens, &tid);
     ast_expect(token, token_float, file);
@@ -134,6 +134,7 @@ Ast ast_expression_value_parse_int(Tokens tokens, u64* i, Cap_File* file) {
     Ast ast = {0};
     ast.kind = ast_int;
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
 
     Token token = token_get(tokens, &tid);
     ast_expect(token, token_int, file);
@@ -150,6 +151,7 @@ Ast ast_expression_value_parse_subtract(Tokens tokens, u64* i, Cap_File* file) {
     Ast ast = {0};
     ast.kind = ast_subtract;
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
 
     Token token = token_get(tokens, &tid);
     ast_expect(token, token_subtract, file);
@@ -166,6 +168,7 @@ Ast ast_expression_value_parse_subtract(Tokens tokens, u64* i, Cap_File* file) {
     implicit_zero.kind = ast_int;
     implicit_zero.int_value.value = 0;
     implicit_zero.tokens.data = ast.tokens.data;
+    implicit_zero.file = file;
     implicit_zero.tokens.count = 1;
 
     ast.biop.lhs = cap_alloc(sizeof(Ast));
@@ -253,6 +256,7 @@ Ast ast_expression_reference_parse(Tokens tokens, u64* i, Cap_File* file, Ast* l
     Ast ast = {0};
     ast.kind = ast_reference;
     ast.tokens.data = lhs->tokens.data;
+    ast.file = file;
 
     token_next(tokens, &tid);
     token = token_get(tokens, &tid);
@@ -279,6 +283,7 @@ Ast ast_expression_dereference_parse(Tokens tokens, u64* i, Cap_File* file, Ast*
     Ast ast = {0};
     ast.kind = ast_dereference;
     ast.tokens.data = lhs->tokens.data;
+    ast.file = file;
 
     token_next(tokens, &tid);
     token = token_get(tokens, &tid);
@@ -375,6 +380,7 @@ Ast _ast_expression_parse(Tokens tokens, u64* i, Cap_File* file, Token_Kind* del
 
         Ast ast_biop = {0};
         ast_biop.tokens.data = lhs.tokens.data;
+        ast_biop.file = file;
         ast_biop.tokens.count = tid - *i;
         ast_biop.kind = ast_token_type_to_biop_kind(token.kind);
         ast_biop.biop.lhs = cap_alloc(sizeof(Ast));
@@ -397,6 +403,7 @@ Ast ast_return_parse(Tokens tokens, u64* i, Cap_File* file) {
     Ast ast = {0};
     ast.kind = ast_return;
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
 
     Token token = token_get(tokens, &tid);
     ast_expect(token, token_return, file);
@@ -423,6 +430,7 @@ Ast ast_dereference_type_parse(Tokens tokens, u64* i, Cap_File* file, Ast* lhs) 
     Ast ast = {0};
     ast.kind = ast_dereference;
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
 
     Token token = token_get(tokens, &tid);
     ast_expect(token, token_multiply, file);
@@ -474,6 +482,7 @@ Ast ast_assignee_parse(Tokens tokens, u64* i, Cap_File* file) {
     u64 tid = *i;
     Ast ast = {0};
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
     cap_context.log = false;
     Ast type = ast_type_parse(tokens, &tid, file);
     cap_context.log = true;
@@ -523,6 +532,7 @@ Ast ast_assignment_parse(Tokens tokens, u64* i, Cap_File* file) {
     Ast ast = {0};
     ast.kind = ast_assignment;
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
 
     u64 assignee_capacity = 8;
     ast.assignment.assignees = cap_alloc(assignee_capacity * sizeof(ast.assignment.assignees[0]));
@@ -572,13 +582,14 @@ Ast ast_assignment_parse(Tokens tokens, u64* i, Cap_File* file) {
             for (u64 i = 0; i < ast.assignment.values_count; i++) {
                 Ast* assignee = &ast.assignment.assignees[i];
                 if (assignee->kind == ast_variable_declaration) {
-                    log_error_ast(file, assignee, "Cannot use assignment operators(+=, -=, etc) with variable declarations");
+                    log_error_ast(assignee, "Cannot use assignment operators(+=, -=, etc) with variable declarations");
                     return (Ast){0};
                 }
                 Ast* value = &ast.assignment.values[i];
                 Ast ast = {0};
                 ast.kind = ast_token_type_to_biop_kind(assignment_token.kind);
                 ast.tokens.data = tokens.data + assignment_token_id;
+                ast.file = file;
                 ast.tokens.count = 1;
                 ast.biop.lhs = cap_alloc(sizeof(Ast));
                 *ast.biop.lhs = *assignee;
@@ -702,6 +713,7 @@ Ast ast_function_declaration_parameter_parse(Tokens tokens, u64* i, Cap_File* fi
     Ast ast = {0};
     ast.kind = ast_function_declaration_parameter;
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
 
     Ast type = ast_type_parse(tokens, &tid, file);
     if (type.kind == ast_invalid) return (Ast){0};
@@ -723,6 +735,7 @@ Ast ast_function_declaration_parse(Tokens tokens, u64* i, Cap_File* file) {
     Ast ast = {0};
     ast.kind = ast_function_declaration;
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
 
     Token token;
 
@@ -855,6 +868,7 @@ Ast ast_parse_top_level_ast(Tokens tokens, u64* i, Cap_File* file) {
     Ast ast = {0};
     ast.kind = ast_top_level;
     ast.tokens.data = tokens.data + *i;
+    ast.file = file;
 
     u64 program_capacity = 8;
     ast.top_level.programs = cap_alloc(program_capacity * sizeof(ast.top_level.programs[0]));

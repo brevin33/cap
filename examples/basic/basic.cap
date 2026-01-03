@@ -1,5 +1,4 @@
 
-int foo()
 
 program main{
     return 88

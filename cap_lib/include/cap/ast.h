@@ -134,6 +134,7 @@ struct Ast_Function_Scope {
 struct Ast {
     Ast_Kind kind;
     Tokens tokens;
+    Cap_File* file;
     union {
         Ast_Return return_;
         Ast_Int int_value;

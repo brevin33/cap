@@ -2,6 +2,7 @@
 
 void log_error(const char* message, ...) {
     if (!cap_context.log) return;
+    cap_context.error_count++;
     printf("\x1b[31m");
     va_list args;
     va_start(args, message);
@@ -13,7 +14,9 @@ void log_error(const char* message, ...) {
 
 void log_error_token(Cap_File* file, Token token, const char* message, ...) {
     if (!cap_context.log) return;
+    cap_context.error_count++;
     printf("\x1b[31m");
+    if (cap_context.error_count > 16) mabort(str("Too many errors"));
 
     String substring = token.content;
 
@@ -28,8 +31,9 @@ void log_error_token(Cap_File* file, Token token, const char* message, ...) {
     printf("\x1b[0m");
 }
 
-void log_error_ast(Cap_File* file, Ast* ast, const char* message, ...) {
+void log_error_ast(Ast* ast, const char* message, ...) {
     if (!cap_context.log) return;
+    cap_context.error_count++;
     printf("\x1b[31m");
 
     String substring = ast_get_substring(ast);
@@ -39,7 +43,7 @@ void log_error_ast(Cap_File* file, Ast* ast, const char* message, ...) {
     printf("Error at ast ");
     String ast_str = ast_to_string_short(ast);
     printf("\"%.*s\" ", str_info(ast_str));
-    _log_chunk(message, args, file, substring);
+    _log_chunk(message, args, ast->file, substring);
     va_end(args);
 
     printf("\x1b[0m");
@@ -72,7 +76,7 @@ void log_warning_token(Cap_File* file, Token token, const char* message, ...) {
     printf("\x1b[0m");
 }
 
-void log_warning_ast(Cap_File* file, Ast* ast, const char* message, ...) {
+void log_warning_ast(Ast* ast, const char* message, ...) {
     if (!cap_context.log) return;
     printf("\x1b[33m");
     String substring = ast_get_substring(ast);
@@ -82,7 +86,7 @@ void log_warning_ast(Cap_File* file, Ast* ast, const char* message, ...) {
     printf("Warning at ast ");
     String ast_str = ast_to_string_short(ast);
     printf("\"%.*s\" ", str_info(ast_str));
-    _log_chunk(message, args, file, substring);
+    _log_chunk(message, args, ast->file, substring);
     va_end(args);
 
     printf("\x1b[0m");
@@ -115,7 +119,7 @@ void log_info_token(Cap_File* file, Token token, const char* message, ...) {
     printf("\x1b[0m");
 }
 
-void log_info_ast(Cap_File* file, Ast* ast, const char* message, ...) {
+void log_info_ast(Ast* ast, const char* message, ...) {
     if (!cap_context.log) return;
     printf("\x1b[34m");
     String substring = ast_get_substring(ast);
@@ -125,7 +129,7 @@ void log_info_ast(Cap_File* file, Ast* ast, const char* message, ...) {
     printf("Info at ast ");
     String ast_str = ast_to_string_short(ast);
     printf("\"%.*s\" ", str_info(ast_str));
-    _log_chunk(message, args, file, substring);
+    _log_chunk(message, args, ast->file, substring);
     va_end(args);
 
     printf("\x1b[0m");
@@ -158,7 +162,7 @@ void log_success_token(Cap_File* file, Token token, const char* message, ...) {
     printf("\x1b[0m");
 }
 
-void log_success_ast(Cap_File* file, Ast* ast, const char* message, ...) {
+void log_success_ast(Ast* ast, const char* message, ...) {
     if (!cap_context.log) return;
     printf("\x1b[32m");
     String substring = ast_get_substring(ast);
@@ -168,7 +172,7 @@ void log_success_ast(Cap_File* file, Ast* ast, const char* message, ...) {
     printf("Success at ast ");
     String ast_str = ast_to_string_short(ast);
     printf("\"%.*s\" ", str_info(ast_str));
-    _log_chunk(message, args, file, substring);
+    _log_chunk(message, args, ast->file, substring);
     va_end(args);
 
     printf("\x1b[0m");

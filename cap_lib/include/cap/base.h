@@ -55,10 +55,10 @@ typedef double f64;
     } while (0)
 #endif
 
-#define mabort(msg)                                                   \
-    do {                                                              \
-        printf("Cap Error: : %.*s\n", (int)(msg).length, (msg).data); \
-        abort();                                                      \
+#define mabort(msg)                                                 \
+    do {                                                            \
+        printf("Cap Error: %.*s\n", (int)(msg).length, (msg).data); \
+        abort();                                                    \
     } while (0)
 
 #define ptr_append(ptr, count, capacity, item)             \
@@ -72,7 +72,3 @@ typedef double f64;
         }                                                  \
         ptr[count++] = item;                               \
     } while (0)
-
-void* cap_alloc(u64 size);
-
-void cap_init();
