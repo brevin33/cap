@@ -12,6 +12,20 @@ void log_error(const char* message, ...) {
     printf("\x1b[0m");
 }
 
+void log_error_substring(String substring, const char* message, ...) {
+    if (!cap_context.log) return;
+    cap_context.error_count++;
+    printf("\x1b[31m");
+    va_list args;
+    va_start(args, message);
+
+    printf("Error ");
+    _log_chunk(message, args, NULL, substring);
+
+    va_end(args);
+    printf("\x1b[0m");
+}
+
 void log_error_token(Cap_File* file, Token token, const char* message, ...) {
     if (!cap_context.log) return;
     cap_context.error_count++;
@@ -60,6 +74,19 @@ void log_warning(const char* message, ...) {
     printf("\x1b[0m");
 }
 
+void log_warning_substring(String substring, const char* message, ...) {
+    if (!cap_context.log) return;
+    printf("\x1b[33m");
+    va_list args;
+    va_start(args, message);
+
+    printf("Warning ");
+    _log_chunk(message, args, NULL, substring);
+
+    va_end(args);
+    printf("\x1b[0m");
+}
+
 void log_warning_token(Cap_File* file, Token token, const char* message, ...) {
     if (!cap_context.log) return;
     printf("\x1b[33m");
@@ -103,6 +130,19 @@ void log_info(const char* message, ...) {
     printf("\x1b[0m");
 }
 
+void log_info_substring(String substring, const char* message, ...) {
+    if (!cap_context.log) return;
+    printf("\x1b[34m");
+    va_list args;
+    va_start(args, message);
+
+    printf("Info ");
+    _log_chunk(message, args, NULL, substring);
+
+    va_end(args);
+    printf("\x1b[0m");
+}
+
 void log_info_token(Cap_File* file, Token token, const char* message, ...) {
     if (!cap_context.log) return;
     printf("\x1b[34m");
@@ -142,6 +182,19 @@ void log_success(const char* message, ...) {
     va_start(args, message);
     printf("Success: ");
     vprintf(message, args);
+    va_end(args);
+    printf("\x1b[0m");
+}
+
+void log_success_substring(String substring, const char* message, ...) {
+    if (!cap_context.log) return;
+    printf("\x1b[32m");
+    va_list args;
+    va_start(args, message);
+
+    printf("Success ");
+    _log_chunk(message, args, NULL, substring);
+
     va_end(args);
     printf("\x1b[0m");
 }

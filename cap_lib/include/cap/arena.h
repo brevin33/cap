@@ -25,3 +25,5 @@ void* arena_alloc(Arena* arena, u64 size);
 void arena_clear(Arena* arena);
 
 void arena_free(Arena* arena);
+
+bool arena_memory_is_inside_arena(Arena* arena, void* memory);

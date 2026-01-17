@@ -12,6 +12,7 @@ typedef enum Token_Kind {
     token_program,
     token_return,
     token_if,
+    token_as,
     token_end_statement,
     token_end_file,
     token_int,
@@ -52,6 +53,12 @@ typedef enum Token_Kind {
     token_comma,
     token_paren_open,
     token_paren_close,
+    token_hashtag,
+    token_include,
+    token_string_block,
+    token_string_block_end,
+    token_colon_colon,
+    token_colon,
 } Token_Kind;
 
 struct Token {
@@ -90,3 +97,6 @@ bool _token_should_insert_endstatement(Token* token);
 
 bool token_is_assign(Token_Kind kind);
 bool token_is_assign_and_operator(Token_Kind kind);
+
+bool token_string_block_is_start_of_string(Token token);
+String token_get_string_block_str(Token token);

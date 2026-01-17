@@ -1,5 +1,9 @@
 
+type foo(){
+    return i32
+}
 
 program main{
-    return 88
+    foo() a = 3
+    return a
 }

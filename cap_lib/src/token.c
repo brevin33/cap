@@ -1,4 +1,7 @@
+#include "cap/token.h"
+
 #include "cap.h"
+#include "cap/log.h"
 #include "cap/string.h"
 
 bool token_is_assign(Token_Kind kind) {
@@ -51,7 +54,12 @@ bool _token_should_insert_endstatement(Token* token) {
         case token_multiply:
         case token_bitwise_and:
         case token_paren_close:
+        case token_string_block_end:
+        case token_as:
+        case token_include:
             return true;
+        case token_hashtag:
+        case token_string_block:
         case token_bitwise_xor:
         case token_shift_left_assign:
         case token_shift_right_assign:
@@ -86,6 +94,8 @@ bool _token_should_insert_endstatement(Token* token) {
         case token_end_statement:
         case token_comma:
         case token_paren_open:
+        case token_colon_colon:
+        case token_colon:
             return false;
     }
 }
@@ -106,6 +116,8 @@ String token_token_kind_to_string(Token_Kind kind) {
     switch (kind) {
         case token_invalid:
             return str("invalid");
+        case token_string_block:
+            return str("string_block");
         case token_comma:
             return str("comma");
         case token_identifier:
@@ -194,6 +206,18 @@ String token_token_kind_to_string(Token_Kind kind) {
             return str("paren_open");
         case token_paren_close:
             return str("paren_close");
+        case token_hashtag:
+            return str("hashtag");
+        case token_include:
+            return str("include");
+        case token_string_block_end:
+            return str("string_block_end");
+        case token_as:
+            return str("as");
+        case token_colon_colon:
+            return str("colon_colon");
+        case token_colon:
+            return str("colon");
     }
 }
 
@@ -227,12 +251,15 @@ u64 token_precedence(Token_Kind kind) {
             return 9;
         case token_logical_or:
             return 10;
+        case token_as:
         case token_paren_open:
         case token_paren_close:
+        case token_string_block:
         case token_comma:
         case token_not:
         case token_assign:
         case token_arrow:
+        case token_string_block_end:
         case token_add_assign:
         case token_subtract_assign:
         case token_multiply_assign:
@@ -254,6 +281,10 @@ u64 token_precedence(Token_Kind kind) {
         case token_bitwise_and_assign:
         case token_bitwise_or_assign:
         case token_bitwise_xor_assign:
+        case token_hashtag:
+        case token_include:
+        case token_colon_colon:
+        case token_colon:
             return UINT64_MAX;
     }
 }
@@ -318,6 +349,105 @@ void token_previous(Tokens tokens, u64* i) {
     *i -= 1;
 }
 
+static bool _token_is_multiline_string(char* string_start) {
+    if (string_start[1] == '\"' && string_start[2] == '\"') return true;
+    return false;
+}
+
+bool token_string_block_is_start_of_string(Token token) {
+    char c = token.content.data[0];
+    return c == '\"';
+}
+
+String token_get_string_block_str(Token token) {
+    massert(token.kind == token_string_block || token.kind == token_string_block_end, str("Expected string block"));
+    bool is_multiline = _token_is_multiline_string(token.content.data);
+    bool is_end_of_string = token.kind == token_string_block_end;
+    bool is_start_of_string = token_string_block_is_start_of_string(token);
+    String substr = {0};
+    if (is_multiline) {
+        if (is_start_of_string) {
+            substr.data = token.content.data + 3;
+            if (is_end_of_string) {
+                substr.length = token.content.length - 6;
+            } else {
+                substr.length = token.content.length - 4;
+            }
+        } else {
+            substr.data = token.content.data + 1;
+            if (is_end_of_string) {
+                substr.length = token.content.length - 4;
+            } else {
+                substr.length = token.content.length - 2;
+            }
+        }
+    } else {
+        substr.data = token.content.data + 1;
+        substr.length = token.content.length - 2;
+    }
+
+    String escape_sequence_fixed;
+    escape_sequence_fixed.data = cap_alloc(substr.length * sizeof(char));
+    escape_sequence_fixed.length = 0;
+    for (u64 i = 0; i < substr.length; i++) {
+        char c = substr.data[i];
+        if (c == '\\') {
+            i++;
+            c = substr.data[i];
+            switch (c) {
+                case 'n': {
+                    escape_sequence_fixed.data[escape_sequence_fixed.length++] = '\n';
+                    break;
+                }
+                case 'r': {
+                    escape_sequence_fixed.data[escape_sequence_fixed.length++] = '\r';
+                    break;
+                }
+                case 't': {
+                    escape_sequence_fixed.data[escape_sequence_fixed.length++] = '\t';
+                    break;
+                }
+                case '0': {
+                    escape_sequence_fixed.data[escape_sequence_fixed.length++] = '\0';
+                    break;
+                }
+                case '\\': {
+                    escape_sequence_fixed.data[escape_sequence_fixed.length++] = '\\';
+                    break;
+                }
+                case '"': {
+                    escape_sequence_fixed.data[escape_sequence_fixed.length++] = '"';
+                    break;
+                }
+                case '\'': {
+                    escape_sequence_fixed.data[escape_sequence_fixed.length++] = '\'';
+                    break;
+                }
+                default: {
+                    String escape_substr;
+                    escape_substr.data = substr.data + i - 1;
+                    escape_substr.length = 2;
+                    log_error_substring(escape_substr, "Invalid escape sequence");
+                    escape_sequence_fixed.data[escape_sequence_fixed.length++] = c;
+                    break;
+                }
+            }
+        } else {
+            escape_sequence_fixed.data[escape_sequence_fixed.length++] = c;
+        }
+    }
+    return escape_sequence_fixed;
+}
+
+Token_Kind _token_get_keyword_kind(String keyword) {
+    if (string_equal(keyword, str("program"))) return token_program;
+    if (string_equal(keyword, str("return"))) return token_return;
+    if (string_equal(keyword, str("if"))) return token_if;
+    if (string_equal(keyword, str("include"))) return token_include;
+    if (string_equal(keyword, str("as"))) return token_as;
+    return token_identifier;
+}
+
 Tokens token_tokenize(Cap_File* file) {
     String file_content = file->content;
     char* walk = file_content.data;
@@ -325,6 +455,10 @@ Tokens token_tokenize(Cap_File* file) {
     u64 capacity = 8;
     tokens.data = cap_alloc(capacity * sizeof(tokens.data[0]));
     tokens.count = 0;
+
+    u64 string_stack_count = 0;
+    char* string_stack[1024];
+
     while (walk < file_content.data + file_content.length) {
         Token token = {0};
         String content = {0};
@@ -347,15 +481,7 @@ Tokens token_tokenize(Cap_File* file) {
                 c = *++walk;
             }
             content.length = walk - content.data;
-            if (string_equal(content, str("program"))) {
-                token.kind = token_program;
-            } else if (string_equal(content, str("return"))) {
-                token.kind = token_return;
-            } else if (string_equal(content, str("if"))) {
-                token.kind = token_if;
-            } else {
-                token.kind = token_identifier;
-            }
+            token.kind = _token_get_keyword_kind(content);
         } else if ((c >= '0' && c <= '9') || c == '.') {
             bool is_float = false;
             while ((c >= '0' && c <= '9') || c == '.' || c == '_') {
@@ -375,7 +501,55 @@ Tokens token_tokenize(Cap_File* file) {
             token.kind = token_begin_scope;
         } else if (c == '}') {
             walk++;
-            token.kind = token_end_scope;
+            if (string_stack_count == 0) {
+                token.kind = token_end_scope;
+            } else {
+                token.kind = token_string_block;
+                char* string_start = string_stack[string_stack_count - 1];
+                bool is_multiline = _token_is_multiline_string(string_start);
+                while (true) {
+                    char c = *walk;
+                    if (c == '\n' && !is_multiline) {
+                        String error_substr;
+                        error_substr.data = string_start;
+                        error_substr.length = is_multiline ? 3 : 1;
+                        log_error_substring(error_substr, "Unterminated string");
+                        token.kind = token_invalid;
+                        break;
+                    }
+                    if (c == '"') {
+                        walk++;
+                        if (is_multiline) {
+                            if (walk[0] != '\"' || walk[1] != '\"') {
+                                String error_substr;
+                                error_substr.data = walk;
+                                error_substr.length = is_multiline ? 3 : 1;
+                                log_error_substring(error_substr, "Must terminate string with \"\"\"");
+                                token.kind = token_invalid;
+                                break;
+                            }
+                            walk += 2;
+                        }
+                        string_stack_count--;
+                        token.kind = token_string_block_end;
+                        break;
+                    }
+                    if (c == '\0') {
+                        String error_substr;
+                        error_substr.data = string_start;
+                        error_substr.length = is_multiline ? 3 : 1;
+                        log_error_substring(error_substr, "Unterminated string");
+                        token.kind = token_invalid;
+                        break;
+                    }
+                    if (c == '{') {
+                        walk++;
+                        break;
+                    }
+                    walk++;
+                }
+            }
+
         } else if (c == '+') {
             walk++;
             c = *walk;
@@ -520,6 +694,62 @@ Tokens token_tokenize(Cap_File* file) {
         } else if (c == ')') {
             walk++;
             token.kind = token_paren_close;
+        } else if (c == '#') {
+            walk++;
+            token.kind = token_hashtag;
+        } else if (c == ':') {
+            walk++;
+            if (*walk == ':') {
+                walk++;
+                token.kind = token_colon_colon;
+            } else {
+                token.kind = token_colon;
+            }
+        } else if (c == '"') {
+            walk++;
+            token.kind = token_string_block;
+            char* string_start = walk;
+            string_stack[string_stack_count++] = string_start;
+            bool is_multiline = _token_is_multiline_string(string_start);
+            if (is_multiline) walk += 2;
+            while (true) {
+                char c = *walk;
+                if (c == '\n' && !is_multiline) {
+                    String error_substr;
+                    error_substr.data = string_start;
+                    error_substr.length = is_multiline ? 3 : 1;
+                    log_error_substring(error_substr, "Unterminated string");
+                    break;
+                }
+                if (c == '"') {
+                    walk++;
+                    if (is_multiline) {
+                        if (walk[0] != '\"' || walk[1] != '\"') {
+                            String error_substr;
+                            error_substr.data = walk;
+                            error_substr.length = is_multiline ? 3 : 1;
+                            log_error_substring(error_substr, "Must terminate string with \"\"\"");
+                            break;
+                        }
+                        walk += 2;
+                    }
+                    string_stack_count--;
+                    token.kind = token_string_block_end;
+                    break;
+                }
+                if (c == '\0') {
+                    String error_substr;
+                    error_substr.data = string_start;
+                    error_substr.length = is_multiline ? 3 : 1;
+                    log_error_substring(error_substr, "Unterminated string");
+                    break;
+                }
+                if (c == '{') {
+                    walk++;
+                    break;
+                }
+                walk++;
+            }
         } else {
             walk++;
             token.kind = token_invalid;

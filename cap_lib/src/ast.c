@@ -1,4 +1,5 @@
 #include "cap.h"
+#include "cap/token.h"
 
 Ast ast_parse_program(Tokens tokens, u64* i, Cap_File* file) {
     u64 tid = *i;
@@ -97,9 +98,69 @@ Ast ast_variable_parse(Tokens tokens, u64* i, Cap_File* file) {
     ast.tokens.data = tokens.data + *i;
     ast.file = file;
 
+    u64 ids_capacity = 2;
+    u64 ids_count = 0;
+    String* ids = cap_alloc(ids_capacity * sizeof(String));
+
+    while (true) {
+        Token token = token_get(tokens, &tid);
+        ast_expect(token, token_identifier, file);
+        String id = token.content;
+        token_next(tokens, &tid);
+        ptr_append(ids, ids_count, ids_capacity, id);
+        if (token.kind == token_colon_colon) {
+            token_next(tokens, &tid);
+            continue;
+        }
+        break;
+    }
+
+    ast.variable.namespaces = ids;
+    ast.variable.namespaces_count = ids_count - 1;
+    ast.variable.name = ids[ids_count - 1];
+    ast.tokens.count = tid - *i;
+
+    token_set(tokens, i, tid);
+    return ast;
+}
+
+Ast ast_function_call_parse(Tokens tokens, u64* i, Cap_File* file) {
+    u64 tid = *i;
+    Ast ast = {0};
+    ast.kind = ast_function_call;
+    ast.tokens.data = tokens.data + *i;
+    ast.file = file;
+
+    Ast var = ast_variable_parse(tokens, &tid, file);
+    if (var.kind == ast_invalid) return (Ast){0};
+    ast.function_call.function_variable = cap_alloc(sizeof(Ast));
+    *ast.function_call.function_variable = var;
+
     Token token = token_get(tokens, &tid);
-    ast_expect(token, token_identifier, file);
-    ast.variable.name = token.content;
+    ast_expect(token, token_paren_open, file);
+    token_next(tokens, &tid);
+
+    u64 parameter_capacity = 8;
+    ast.function_call.parameters = cap_alloc(parameter_capacity * sizeof(ast.function_call.parameters[0]));
+    ast.function_call.parameters_count = 0;
+
+    token = token_get(tokens, &tid);
+    if (token.kind != token_paren_close) {
+        while (true) {
+            Token_Kind delimiters[] = {token_paren_close, token_comma};
+            Ast parameter = ast_expression_parse(tokens, &tid, file, delimiters, arr_len(delimiters));
+            if (parameter.kind == ast_invalid) return (Ast){0};
+            ptr_append(ast.function_call.parameters, ast.function_call.parameters_count, parameter_capacity, parameter);
+            token = token_get(tokens, &tid);
+            if (token.kind == token_comma) {
+                token_next(tokens, &tid);
+                continue;
+            } else if (token.kind == token_paren_close) break;
+            log_error_token(file, token, "Expected comma or close paren");
+            return (Ast){0};
+        }
+    }
+    massert(token.kind == token_paren_close, str("Expected close paren"));
     token_next(tokens, &tid);
 
     ast.tokens.count = tid - *i;
@@ -107,8 +168,21 @@ Ast ast_variable_parse(Tokens tokens, u64* i, Cap_File* file) {
     return ast;
 }
 
+bool ast_expression_value_parse_identifier_as_function_call(Tokens tokens, u64* i, Cap_File* file) {
+    u64 tid = *i;
+    Token token = token_get(tokens, &tid);
+    if (token.kind != token_identifier) return false;
+    token_next(tokens, &tid);
+
+    token = token_get(tokens, &tid);
+    if (token.kind != token_paren_open) return false;
+    token_next(tokens, &tid);
+    return true;
+}
+
 Ast ast_expression_value_parse_identifier(Tokens tokens, u64* i, Cap_File* file) {
     u64 tid = *i;
+    if (ast_expression_value_parse_identifier_as_function_call(tokens, &tid, file)) return ast_function_call_parse(tokens, i, file);
     return ast_variable_parse(tokens, i, file);
 }
 
@@ -181,6 +255,49 @@ Ast ast_expression_value_parse_subtract(Tokens tokens, u64* i, Cap_File* file) {
     return ast;
 }
 
+Ast ast_string_parse(Tokens tokens, u64* i, Cap_File* file) {
+    u64 tid = *i;
+    Ast ast = {0};
+    ast.kind = ast_string;
+    ast.tokens.data = tokens.data + *i;
+    ast.file = file;
+
+    u64 strings_capacity = 8;
+    u64 strings_count = 0;
+    String* strings = cap_alloc(strings_capacity * sizeof(String));
+    u64 fmts_capacity = 8;
+    u64 fmts_count = 0;
+    Ast* fmts = cap_alloc(fmts_capacity * sizeof(Ast*));
+
+    Token token;
+    while (true) {
+        token = token_get(tokens, &tid);
+        if (token.kind != token_string_block_end && token.kind != token_string_block) {
+            log_error_token(file, token, "Expected string block");
+            return (Ast){0};
+        }
+        String block_str = token_get_string_block_str(token);
+        ptr_append(strings, strings_count, strings_capacity, block_str);
+        if (token.kind == token_string_block_end) break;
+        token_next(tokens, &tid);
+
+        Token_Kind delimiters[] = {token_string_block_end, token_string_block};
+        Ast expr = ast_expression_parse(tokens, &tid, file, delimiters, arr_len(delimiters));
+        if (expr.kind == ast_invalid) return (Ast){0};
+
+        ptr_append(fmts, fmts_count, fmts_capacity, expr);
+    }
+    massert(token.kind == token_string_block_end, str("Expected string block end"));
+    token_next(tokens, &tid);
+
+    ast.string.strings = strings;
+    ast.string.fmts = fmts;
+    ast.string.strings_count = strings_count;
+    ast.tokens.count = tid - *i;
+    token_set(tokens, i, tid);
+    return ast;
+}
+
 Ast ast_expression_value_parse(Tokens tokens, u64* i, Cap_File* file) {
     Token token = token_get(tokens, i);
     switch (token.kind) {
@@ -204,6 +321,10 @@ Ast ast_expression_value_parse(Tokens tokens, u64* i, Cap_File* file) {
             Token_Kind delimiters[] = {token_paren_close};
             return ast_expression_parse(tokens, i, file, delimiters, arr_len(delimiters));
         }
+        case token_string_block_end:
+        case token_string_block: {
+            return ast_string_parse(tokens, i, file);
+        }
         case token_paren_close:
         case token_bitwise_xor:
         case token_shift_left_assign:
@@ -218,6 +339,8 @@ Ast ast_expression_value_parse(Tokens tokens, u64* i, Cap_File* file) {
         case token_divide:
         case token_modulo:
         case token_greater:
+        case token_colon:
+        case token_colon_colon:
         case token_less:
         case token_greater_equal:
         case token_less_equal:
@@ -226,6 +349,9 @@ Ast ast_expression_value_parse(Tokens tokens, u64* i, Cap_File* file) {
         case token_logical_or:
         case token_bitwise_or:
         case token_assign:
+        case token_as:
+        case token_hashtag:
+        case token_include:
         case token_arrow:
         case token_equal:
         case token_not_equal:
@@ -305,14 +431,19 @@ Ast ast_expression_dereference_parse(Tokens tokens, u64* i, Cap_File* file, Ast*
 
 Ast_Kind ast_token_type_to_biop_kind(Token_Kind kind) {
     switch (kind) {
+        case token_add_assign:
         case token_add:
             return ast_add;
+        case token_subtract_assign:
         case token_subtract:
             return ast_subtract;
+        case token_multiply_assign:
         case token_multiply:
             return ast_multiply;
+        case token_divide_assign:
         case token_divide:
             return ast_divide;
+        case token_modulo_assign:
         case token_modulo:
             return ast_modulo;
         case token_greater:
@@ -325,14 +456,18 @@ Ast_Kind ast_token_type_to_biop_kind(Token_Kind kind) {
             return ast_less_equal;
         case token_logical_and:
             return ast_logical_and;
+        case token_bitwise_and_assign:
         case token_bitwise_and:
             return ast_bitwise_and;
         case token_logical_or:
             return ast_logical_or;
+        case token_bitwise_or_assign:
         case token_bitwise_or:
             return ast_bitwise_or;
+        case token_shift_left_assign:
         case token_shift_left:
             return ast_shift_left;
+        case token_shift_right_assign:
         case token_shift_right:
             return ast_shift_right;
         default: {
@@ -367,6 +502,21 @@ Ast _ast_expression_parse(Tokens tokens, u64* i, Cap_File* file, Token_Kind* del
                 continue;
             }
         }
+        if (token.kind == token_identifier) {
+            Ast rhs = ast_expression_parse(tokens, &tid, file, delimiter, delimiter_count);
+            if (rhs.kind == ast_invalid) return (Ast){0};
+            Ast nil_biop = {0};
+            nil_biop.tokens.data = lhs.tokens.data;
+            nil_biop.file = file;
+            nil_biop.tokens.count = tid - *i;
+            nil_biop.kind = ast_nil_biop;
+            nil_biop.biop.lhs = cap_alloc(sizeof(Ast));
+            *nil_biop.biop.lhs = lhs;
+            nil_biop.biop.rhs = cap_alloc(sizeof(Ast));
+            *nil_biop.biop.rhs = rhs;
+            lhs = nil_biop;
+            continue;
+        }
 
         Token op_token = token_get(tokens, &tid);
         u64 operator_precedence = token_precedence(op_token.kind);
@@ -375,8 +525,10 @@ Ast _ast_expression_parse(Tokens tokens, u64* i, Cap_File* file, Token_Kind* del
             return (Ast){0};
         }
         if (operator_precedence > precedence) break;
+        token_next(tokens, &tid);
 
         Ast rhs = ast_expression_parse(tokens, &tid, file, delimiter, delimiter_count);
+        if (rhs.kind == ast_invalid) return (Ast){0};
 
         Ast ast_biop = {0};
         ast_biop.tokens.data = lhs.tokens.data;
@@ -448,6 +600,18 @@ bool ast_can_parse_as_type(Tokens tokens, u64* i, Cap_File* file) {
     Token token = token_get(tokens, &tid);
     if (token.kind != token_identifier) return false;
     token_next(tokens, &tid);
+
+    token = token_get(tokens, &tid);
+    if (token.kind == token_paren_open) {
+        token_next(tokens, &tid);
+        while (true) {
+            token = token_get(tokens, &tid);
+            if (token.kind == token_paren_close) break;
+            if (token.kind == token_end_file) return false;
+            token_next(tokens, &tid);
+        }
+    }
+
     while (true) {
         token = token_get(tokens, &tid);
         if (token.kind == token_multiply) {
@@ -460,10 +624,28 @@ bool ast_can_parse_as_type(Tokens tokens, u64* i, Cap_File* file) {
     return true;
 }
 
+bool ast_type_parse_as_function_call(Tokens tokens, u64* i, Cap_File* file) {
+    u64 tid = *i;
+    Token token = token_get(tokens, &tid);
+    if (token.kind != token_identifier) return false;
+    token_next(tokens, &tid);
+
+    token = token_get(tokens, &tid);
+    if (token.kind != token_paren_open) return false;
+    token_next(tokens, &tid);
+    return true;
+}
+
 Ast ast_type_parse(Tokens tokens, u64* i, Cap_File* file) {
     u64 tid = *i;
+    u64 bsid = tid;
 
-    Ast ast = ast_variable_parse(tokens, &tid, file);
+    Ast ast;
+    if (ast_type_parse_as_function_call(tokens, &tid, file)) {
+        ast = ast_function_call_parse(tokens, &tid, file);
+    } else {
+        ast = ast_variable_parse(tokens, &tid, file);
+    }
     if (ast.kind == ast_invalid) return (Ast){0};
 
     while (true) {
@@ -474,55 +656,6 @@ Ast ast_type_parse(Tokens tokens, u64* i, Cap_File* file) {
         }
         break;
     }
-    token_set(tokens, i, tid);
-    return ast;
-}
-
-Ast ast_assignee_parse(Tokens tokens, u64* i, Cap_File* file) {
-    u64 tid = *i;
-    Ast ast = {0};
-    ast.tokens.data = tokens.data + *i;
-    ast.file = file;
-    cap_context.log = false;
-    Ast type = ast_type_parse(tokens, &tid, file);
-    cap_context.log = true;
-    Token_Kind delimiter[] = {
-        token_end_statement,
-        token_assign,
-        token_add_assign,
-        token_subtract_assign,
-        token_multiply_assign,
-        token_divide_assign,
-        token_modulo_assign,
-        token_shift_left_assign,
-        token_shift_right_assign,
-        token_bitwise_and_assign,
-        token_bitwise_or_assign,
-        token_bitwise_xor_assign,
-        token_comma,
-    };
-    if (type.kind == ast_invalid) {
-        ast = ast_expression_parse(tokens, &tid, file, delimiter, arr_len(delimiter));
-        if (ast.kind == ast_invalid) {
-            // make sure we also log whatever make the type parse fail
-            ast_type_parse(tokens, &tid, file);
-            return (Ast){0};
-        }
-    } else {
-        Token token = token_get(tokens, &tid);
-        if (token.kind == token_identifier) {
-            ast.kind = ast_variable_declaration;
-            ast.variable_declaration.type = cap_alloc(sizeof(Ast));
-            *ast.variable_declaration.type = type;
-            ast.variable_declaration.name = token.content;
-            token_next(tokens, &tid);
-        } else {
-            tid = *i;
-            ast = ast_expression_parse(tokens, &tid, file, delimiter, arr_len(delimiter));
-            if (ast.kind == ast_invalid) return (Ast){0};
-        }
-    }
-    ast.tokens.count = tid - *i;
     token_set(tokens, i, tid);
     return ast;
 }
@@ -538,7 +671,22 @@ Ast ast_assignment_parse(Tokens tokens, u64* i, Cap_File* file) {
     ast.assignment.assignees = cap_alloc(assignee_capacity * sizeof(ast.assignment.assignees[0]));
     ast.assignment.assignees_count = 0;
     while (true) {
-        Ast assignee = ast_assignee_parse(tokens, &tid, file);
+        Token_Kind delimiters[] = {
+            token_end_statement,
+            token_assign,
+            token_add_assign,
+            token_subtract_assign,
+            token_multiply_assign,
+            token_divide_assign,
+            token_modulo_assign,
+            token_shift_left_assign,
+            token_shift_right_assign,
+            token_bitwise_and_assign,
+            token_bitwise_or_assign,
+            token_bitwise_xor_assign,
+            token_comma,
+        };
+        Ast assignee = ast_expression_parse(tokens, &tid, file, delimiters, arr_len(delimiters));
         if (assignee.kind == ast_invalid) return (Ast){0};
         ptr_append(ast.assignment.assignees, ast.assignment.assignees_count, assignee_capacity, assignee);
 
@@ -581,10 +729,6 @@ Ast ast_assignment_parse(Tokens tokens, u64* i, Cap_File* file) {
             }
             for (u64 i = 0; i < ast.assignment.values_count; i++) {
                 Ast* assignee = &ast.assignment.assignees[i];
-                if (assignee->kind == ast_variable_declaration) {
-                    log_error_ast(assignee, "Cannot use assignment operators(+=, -=, etc) with variable declarations");
-                    return (Ast){0};
-                }
                 Ast* value = &ast.assignment.values[i];
                 Ast ast = {0};
                 ast.kind = ast_token_type_to_biop_kind(assignment_token.kind);
@@ -615,6 +759,8 @@ Ast ast_function_scope_statement_parse(Tokens tokens, u64* i, Cap_File* file) {
         case token_identifier: {
             return ast_function_scope_statement_identifier_parse(tokens, i, file);
         }
+        case token_string_block_end:
+        case token_string_block:
         case token_paren_open:
         case token_subtract:
         case token_int:
@@ -642,6 +788,7 @@ Ast ast_function_scope_statement_parse(Tokens tokens, u64* i, Cap_File* file) {
         case token_bitwise_and_assign:
         case token_bitwise_or_assign:
         case token_bitwise_xor_assign:
+        case token_as:
         case token_divide:
         case token_shift_left:
         case token_modulo:
@@ -658,11 +805,15 @@ Ast ast_function_scope_statement_parse(Tokens tokens, u64* i, Cap_File* file) {
         case token_assign:
         case token_arrow:
         case token_equal:
+        case token_include:
         case token_not_equal:
         case token_not:
         case token_add_assign:
         case token_subtract_assign:
         case token_multiply_assign:
+        case token_hashtag:
+        case token_colon_colon:
+        case token_colon:
         case token_divide_assign:
         case token_modulo_assign:
         case token_end_scope:
@@ -806,6 +957,42 @@ Ast ast_parse_top_level_statement_identifier(Tokens tokens, u64* i, Cap_File* fi
     return ast_assignment_parse(tokens, i, file);
 }
 
+Ast ast_parse_include(Tokens tokens, u64* i, Cap_File* file) {
+    u64 tid = *i;
+    Ast ast = {0};
+    ast.kind = ast_include;
+    ast.tokens.data = tokens.data + *i;
+    ast.file = file;
+
+    Token token = token_get(tokens, &tid);
+    ast_expect(token, token_include, file);
+    token_next(tokens, &tid);
+
+    Ast string = ast_string_parse(tokens, &tid, file);
+    if (string.kind == ast_invalid) return (Ast){0};
+    if (string.string.strings_count != 1) {
+        log_error_ast(&string, "can't use format strings in include");
+        return (Ast){0};
+    }
+    String path = string.string.strings[0];
+    ast.include.path = path;
+
+    token = token_get(tokens, &tid);
+    if (token.kind == token_as) {
+        token_next(tokens, &tid);
+        token = token_get(tokens, &tid);
+        ast_expect(token, token_identifier, file);
+        ast.include.namespace_alias = token.content;
+        token_next(tokens, &tid);
+    } else {
+        ast.include.namespace_alias = str("");
+    }
+
+    ast.tokens.count = tid - *i;
+    token_set(tokens, i, tid);
+    return ast;
+}
+
 Ast ast_parse_top_level_statement(Tokens tokens, u64* i, Cap_File* file) {
     Token token = token_get(tokens, i);
     switch (token.kind) {
@@ -813,11 +1000,20 @@ Ast ast_parse_top_level_statement(Tokens tokens, u64* i, Cap_File* file) {
             return ast_parse_program(tokens, i, file);
         case token_identifier:
             return ast_parse_top_level_statement_identifier(tokens, i, file);
+        case token_include: {
+            return ast_parse_include(tokens, i, file);
+        }
         case token_end_statement:
             return (Ast){0};
         case token_end_scope:
             return (Ast){0};  // we don't need to error here as it will be caught as a error for not having a begin scope
+        case token_string_block_end:
+        case token_colon_colon:
+        case token_colon:
+        case token_string_block:
+        case token_hashtag:
         case token_paren_open:
+        case token_as:
         case token_paren_close:
         case token_bitwise_xor:
         case token_shift_left_assign:
@@ -878,6 +1074,10 @@ Ast ast_parse_top_level_ast(Tokens tokens, u64* i, Cap_File* file) {
     ast.top_level.functions = cap_alloc(function_capacity * sizeof(ast.top_level.functions[0]));
     ast.top_level.functions_count = 0;
 
+    u64 include_capacity = 8;
+    ast.top_level.includes = cap_alloc(include_capacity * sizeof(ast.top_level.includes[0]));
+    ast.top_level.includes_count = 0;
+
     Token token = token_get(tokens, &tid);
     while (token.kind != token_end_file) {
         Ast top_level_statement = ast_parse_top_level_statement(tokens, &tid, file);
@@ -888,16 +1088,19 @@ Ast ast_parse_top_level_ast(Tokens tokens, u64* i, Cap_File* file) {
             case ast_function_declaration:
                 ptr_append(ast.top_level.functions, ast.top_level.functions_count, function_capacity, top_level_statement);
                 break;
+            case ast_include:
+                ptr_append(ast.top_level.includes, ast.top_level.includes_count, include_capacity, top_level_statement);
+                break;
             case ast_invalid:
                 break;
+            case ast_nil_biop:
             case ast_top_level:
             case ast_dereference:
             case ast_reference:
             case ast_variable:
             case ast_function_scope:
-            case ast_scope:
+            case ast_string:
             case ast_assignment:
-            case ast_variable_declaration:
             case ast_return:
             case ast_int:
             case ast_float:
@@ -908,6 +1111,7 @@ Ast ast_parse_top_level_ast(Tokens tokens, u64* i, Cap_File* file) {
             case ast_divide:
             case ast_modulo:
             case ast_greater:
+            case ast_function_call:
             case ast_less:
             case ast_greater_equal:
             case ast_less_equal:
@@ -966,6 +1170,10 @@ Ast ast_parse_tokens(Tokens tokens, Cap_File* file) {
 
 String ast_kind_to_string(Ast_Kind kind) {
     switch (kind) {
+        case ast_include:
+            return str("include");
+        case ast_string:
+            return str("string");
         case ast_invalid:
             return str("invalid");
         case ast_return:
@@ -978,12 +1186,10 @@ String ast_kind_to_string(Ast_Kind kind) {
             return str("function_declaration");
         case ast_function_declaration_parameter:
             return str("function_declaration_parameter");
-        case ast_scope:
-            return str("scope");
         case ast_assignment:
             return str("assignment");
-        case ast_variable_declaration:
-            return str("variable_declaration");
+        case ast_nil_biop:
+            return str("nil_biop");
         case ast_top_level:
             return str("top_level");
         case ast_program:
@@ -1026,6 +1232,8 @@ String ast_kind_to_string(Ast_Kind kind) {
             return str("shift_left");
         case ast_shift_right:
             return str("shift_right");
+        case ast_function_call:
+            return str("function_call");
     }
 }
 

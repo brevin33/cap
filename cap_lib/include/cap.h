@@ -14,12 +14,26 @@ typedef struct Cap_Folder Cap_Folder;
 typedef struct Cap_Project Cap_Project;
 
 struct Cap_Context {
-    Arena arena;
+    Arena global_arena;
+    Arena* active_arena;
     bool log;
     u64 error_count;
 
     Allocator_Map allocator_map;
     Scope global_scope;
+
+    Variable** visited_in_typing;
+    u32 visited_in_typing_count;
+    u32 visited_in_typing_capacity;
+
+    Cap_Folder** folders;
+    u64 folders_count;
+    u64 folders_capacity;
+
+    Scope* scope;
+    u64 namespace_we_are_in;
+
+    Function_Implementation* function_being_built;
 };
 
 struct Cap_File {
@@ -35,15 +49,18 @@ struct Cap_Folder {
     Cap_File* files;
     u64 files_count;
 
-    Function** function_ids;
-    u64 functions_count;
-
     Program* programs;
     u64 programs_count;
+
+    Cap_Folder** folders;
+    String* folder_namespace_aliases;
+    u64 folders_count;
+
+    u64 namespace_id;
 };
 
 struct Cap_Project {
-    Cap_Folder base_folder;
+    Cap_Folder* base_folder;
 };
 
 extern Cap_Context cap_context;
@@ -54,6 +71,6 @@ void* cap_alloc(u64 size);
 
 Cap_File cap_create_file(String path);
 
-Cap_Folder cap_create_folder(String path);
+Cap_Folder* cap_create_folder(String path, Cap_Folder** visited_folders, u64 visited_folders_count, u64 visited_folders_capacity);
 
 Cap_Project cap_create_project(String path);

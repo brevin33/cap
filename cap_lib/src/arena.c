@@ -73,6 +73,16 @@ void arena_clear(Arena* arena) {
     arena->current = arena->head;
 }
 
+bool arena_memory_is_inside_arena(Arena* arena, void* memory) {
+    u8* memory_u8 = (u8*)memory;
+    Arena_Block* block = arena->head;
+    while (block != NULL) {
+        if (memory_u8 >= block->front && memory_u8 < block->end) return true;
+        block = block->next;
+    }
+    return false;
+}
+
 void arena_free(Arena* arena) {
     if (arena->allocator != NULL) return;
     Arena_Block* block = arena->head->next;

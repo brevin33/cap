@@ -1,4 +1,16 @@
+#include "cap/filesystem.h"
+
 #include "cap.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dirent.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 String filesystem_read_file(String path) {
     // make sure it is null terminated
@@ -24,8 +36,21 @@ String filesystem_read_file(String path) {
     return str;
 }
 
+bool filesystem_path_is_absolute(String path) {
 #ifdef _WIN32
-#include <windows.h>
+    if (path.length < 3) return false;
+    if (((path.data[0] >= 'A' && path.data[0] <= 'Z') || (path.data[0] >= 'a' && path.data[0] <= 'z')) && path.data[1] == ':' &&
+        (path.data[2] == '\\' || path.data[2] == '/')) {
+        return true;
+    }
+    return false;
+#else
+    if (path.length < 1) return false;
+    return path.data[0] == '/';
+#endif
+}
+
+#ifdef _WIN32
 String* filesystem_read_files_in_folder(String path, u64* out_count) {
     WIN32_FIND_DATA find_file_data = {0};
     char search_path[MAX_PATH];
@@ -86,10 +111,22 @@ String* filesystem_read_folders_in_folder(String path, u64* out_count) {
     *out_count = count;
     return files;
 }
+
+String filesystem_get_absolute_path(String path) {
+    char string_buffer[4096];
+    snprintf(string_buffer, sizeof(string_buffer), "%.*s", str_info(path));
+    char buffer[4096];
+    char* absolute_path = _fullpath(buffer, string_buffer, sizeof(buffer));
+    if (absolute_path == NULL) {
+        mabort(str("Could not get absolute path"));
+    }
+    u64 length = strlen(absolute_path);
+    char* data = cap_alloc(length);
+    memcpy(data, absolute_path, length);
+    return string_create(data, length);
+}
+
 #else
-#include <dirent.h>
-#include <sys/stat.h>
-#include <unistd.h>
 String* filesystem_read_files_in_folder(String path, u64* out_count) {
     // make sure it is null terminated
     char buffer[4096];
@@ -156,4 +193,24 @@ String* filesystem_read_folders_in_folder(String path, u64* out_count) {
     *out_count = count;
     return files;
 }
+
+String filesystem_get_absolute_path(String path) {
+    char string_buffer[4096];
+    snprintf(string_buffer, sizeof(string_buffer), "%.*s", str_info(path));
+    char buffer[4096];
+    char* absolute_path = realpath(path.data, buffer);
+    if (absolute_path == NULL) {
+        mabort(str("Could not get absolute path"));
+    }
+    u64 length = strlen(absolute_path);
+    char* data = cap_alloc(length);
+    memcpy(data, absolute_path, length);
+    return string_create(data, length);
+}
 #endif
+
+bool filesystem_path_are_equal(String path1, String path2) {
+    String absolute_path1 = filesystem_get_absolute_path(path1);
+    String absolute_path2 = filesystem_get_absolute_path(path2);
+    return string_equal(absolute_path1, absolute_path2);
+}
