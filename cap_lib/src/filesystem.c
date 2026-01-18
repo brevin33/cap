@@ -126,6 +126,25 @@ String filesystem_get_absolute_path(String path) {
     return string_create(data, length);
 }
 
+bool filesystem_make_directory(String path) {
+    char cPath[MAX_PATH];
+    snprintf(cPath, MAX_PATH, "%.*s", str_info(path));
+    return CreateDirectoryA(cPath, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+}
+
+bool filesystem_directory_exists(String path) {
+    char cPath[MAX_PATH];
+    snprintf(cPath, MAX_PATH, "%.*s", str_info(path));
+    DWORD dwAttrib = GetFileAttributesA(cPath);
+    return (dwAttrib != INVALID_FILE_ATTRIBUTES && (dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+bool filesystem_delete_directory(String path) {
+    char cPath[MAX_PATH];
+    snprintf(cPath, MAX_PATH, "%.*s", str_info(path));
+    return RemoveDirectoryA(cPath);
+}
+
 #else
 String* filesystem_read_files_in_folder(String path, u64* out_count) {
     // make sure it is null terminated
@@ -207,6 +226,32 @@ String filesystem_get_absolute_path(String path) {
     memcpy(data, absolute_path, length);
     return string_create(data, length);
 }
+
+bool filesystem_make_directory(String path) {
+    char cPath[MAX_PATH];
+    snprintf(cPath, MAX_PATH, "%s", path);
+    bool worked = mkdir(path, 0755) == 0 || errno == EEXIST;
+    errno = 0;
+    return worked;
+}
+
+bool filesystem_directory_exists(String path) {
+    char cPath[MAX_PATH];
+    snprintf(cPath, MAX_PATH, "%s", path);
+    struct stat info;
+    bool worked = stat(path, &info) == 0 && info.st_mode & S_IFDIR;
+    errno = 0;
+    return worked;
+}
+
+bool filesystem_delete_directory(String path) {
+    char cPath[MAX_PATH];
+    snprintf(cPath, MAX_PATH, "%s", path);
+    bool worked = rmdir(path) == 0 || errno == ENOENT;
+    errno = 0;
+    return worked;
+}
+
 #endif
 
 bool filesystem_path_are_equal(String path1, String path2) {

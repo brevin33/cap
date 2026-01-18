@@ -2,6 +2,7 @@
 #include "ast.c"
 #include "cap.c"
 #include "filesystem.c"
+#include "llvm.c"
 #include "log.c"
 #include "semantics.c"
 #include "string.c"

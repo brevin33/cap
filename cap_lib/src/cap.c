@@ -3,8 +3,10 @@
 Cap_Context cap_context;
 
 Cap_Project cap_create_project(String path) {
+    if (path.length == 0) mabort(str("path is empty"));
     Cap_Project project = {0};
 
+    cap_init_context(path);
     u64 visisted_namespaces_capacity = 8;
     Cap_Folder** visisted_namespaces = cap_alloc(visisted_namespaces_capacity * sizeof(Cap_Folder*));
     u64 visisted_namespaces_count = 0;
@@ -121,6 +123,11 @@ Cap_Folder* cap_create_folder(String path, Cap_Folder** visited_folders, u64 vis
         }
     }
 
+    for (u64 i = 0; i < folder->programs_count; i++) {
+        Program* program = &folder->programs[i];
+        llvm_compile_program(program);
+    }
+
     return folder;
 }
 
@@ -142,7 +149,7 @@ void* cap_alloc(u64 size) {
     return mem;
 }
 
-void cap_init() {
+void cap_init_context(String path) {
     cap_context.global_arena = arena_create(MB(100), NULL);
     cap_context.active_arena = &cap_context.global_arena;
     cap_context.log = true;
@@ -193,4 +200,38 @@ void cap_init() {
         *compile_time_value.underlying_type = sem_uint_type(i);
         Variable* uint_var = sem_add_variable(string_append(str("u"), number_str), sem_type_type(), NULL, compile_time_value);
     }
+
+    if (path.data[path.length - 1] == '/' || path.data[path.length - 1] == '\\') {
+        cap_context.build_directory = string_append(path, str("build/"));
+    } else {
+        cap_context.build_directory = string_append(path, str("/build/"));
+    }
+    if (filesystem_directory_exists(cap_context.build_directory)) {
+        if (filesystem_delete_directory(cap_context.build_directory)) mabort(str("Failed to clear old build directory"));
+    }
+    if (!filesystem_make_directory(cap_context.build_directory)) mabort(str("Failed to create build directory"));
+
+    // llvm context setup
+    LLVMInitializeAllAsmParsers();
+    LLVMInitializeAllTargetInfos();
+    LLVMInitializeAllTargets();
+    LLVMInitializeAllTargetMCs();
+    LLVMInitializeAllAsmPrinters();
+    LLVMInitializeAllDisassemblers();
+    char* triple = LLVMGetDefaultTargetTriple();
+
+    cap_context.llvm_info.llvm_context = LLVMContextCreate();
+    cap_context.llvm_info.active_module = NULL;
+    cap_context.llvm_info.builder = LLVMCreateBuilder();
+
+    char* error;
+    if (LLVMGetTargetFromTriple(triple, &cap_context.llvm_info.target, &error) != 0) {
+        String error_str = string_create(error, strlen(error));
+        String error_message = string_append(str("Failed to get llvm target: "), error_str);
+        mabort(error_message);
+    }
+
+    cap_context.llvm_info.target_machine =
+        LLVMCreateTargetMachine(cap_context.llvm_info.target, triple, "", "", LLVMCodeGenLevelDefault, LLVMRelocDefault, LLVMCodeModelDefault);
+    cap_context.llvm_info.data_layout = LLVMCreateTargetDataLayout(cap_context.llvm_info.target_machine);
 }

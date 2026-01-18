@@ -4,6 +4,5 @@ type foo(){
 }
 
 program main{
-    foo() a = 3
-    return a
+    return 0
 }

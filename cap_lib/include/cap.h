@@ -3,6 +3,7 @@
 #include "cap/ast.h"
 #include "cap/base.h"
 #include "cap/filesystem.h"
+#include "cap/llvm.h"
 #include "cap/log.h"
 #include "cap/semantics.h"
 #include "cap/string.h"
@@ -12,6 +13,22 @@ typedef struct Cap_Context Cap_Context;
 typedef struct Cap_File Cap_File;
 typedef struct Cap_Folder Cap_Folder;
 typedef struct Cap_Project Cap_Project;
+typedef struct Cap_LLVM_Context Cap_LLVM_Context;
+
+struct Cap_LLVM_Context {
+    LLVMContextRef llvm_context;
+    LLVMModuleRef active_module;
+    LLVMBuilderRef builder;
+    LLVMTargetDataRef data_layout;
+    LLVMTargetMachineRef target_machine;
+    LLVMTargetRef target;
+    LLVMBasicBlockRef active_block;
+    LLVMValueRef function_being_built;
+
+    LLVM_Scope_Info_Scope_Pair* scope_infos;
+    u64 scope_infos_count;
+    u64 scope_infos_capacity;
+};
 
 struct Cap_Context {
     Arena global_arena;
@@ -34,6 +51,10 @@ struct Cap_Context {
     u64 namespace_we_are_in;
 
     Function_Implementation* function_being_built;
+
+    String build_directory;
+
+    Cap_LLVM_Context llvm_info;
 };
 
 struct Cap_File {
@@ -65,7 +86,7 @@ struct Cap_Project {
 
 extern Cap_Context cap_context;
 
-void cap_init();
+void cap_init_context(String path);
 
 void* cap_alloc(u64 size);
 

@@ -2,10 +2,9 @@
 
 #include "cap.h"
 
-i32 main(int argc, char** argv) {
+i32 main(int argc, char** argv, char** envp) {
     clock_t start = clock();
 
-    cap_init();
     Cap_Project project = cap_create_project(str("C:/Users/brevi/dev/cap/examples/basic/"));
     Cap_Folder* folder = project.base_folder;
     Cap_File* files = folder->files;

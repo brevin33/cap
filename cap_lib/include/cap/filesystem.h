@@ -14,3 +14,9 @@ bool filesystem_path_is_absolute(String path);
 String filesystem_get_absolute_path(String path);
 
 bool filesystem_path_are_equal(String path1, String path2);
+
+bool filesystem_make_directory(String path);
+
+bool filesystem_directory_exists(String path);
+
+bool filesystem_delete_directory(String path);
