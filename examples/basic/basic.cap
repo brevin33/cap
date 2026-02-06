@@ -1,8 +1,6 @@
 
-type foo(){
-    return i32
-}
+i32 g = 8
 
 program main{
-    return 0
+    return g
 }

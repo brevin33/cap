@@ -57,6 +57,7 @@ bool _token_should_insert_endstatement(Token* token) {
         case token_string_block_end:
         case token_as:
         case token_include:
+        case token_struct:
             return true;
         case token_hashtag:
         case token_string_block:
@@ -218,6 +219,8 @@ String token_token_kind_to_string(Token_Kind kind) {
             return str("colon_colon");
         case token_colon:
             return str("colon");
+        case token_struct:
+            return str("struct");
     }
 }
 
@@ -283,6 +286,7 @@ u64 token_precedence(Token_Kind kind) {
         case token_bitwise_xor_assign:
         case token_hashtag:
         case token_include:
+        case token_struct:
         case token_colon_colon:
         case token_colon:
             return UINT64_MAX;
@@ -445,6 +449,7 @@ Token_Kind _token_get_keyword_kind(String keyword) {
     if (string_equal(keyword, str("if"))) return token_if;
     if (string_equal(keyword, str("include"))) return token_include;
     if (string_equal(keyword, str("as"))) return token_as;
+    if (string_equal(keyword, str("struct"))) return token_struct;
     return token_identifier;
 }
 

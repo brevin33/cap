@@ -61,14 +61,14 @@ typedef double f64;
         abort();                                                    \
     } while (0)
 
-#define ptr_append(ptr, count, capacity, item)             \
-    do {                                                   \
-        if (count >= capacity) {                           \
-            capacity *= 2;                                 \
-            if (capacity == 0) capacity = 8;               \
-            void* old_data = ptr;                          \
-            ptr = cap_alloc(capacity * sizeof(ptr[0]));    \
-            memcpy(ptr, old_data, count * sizeof(ptr[0])); \
-        }                                                  \
-        ptr[count++] = item;                               \
+#define ptr_append(ptr, count, capacity, item)                     \
+    do {                                                           \
+        if ((count) >= (capacity)) {                               \
+            (capacity) *= 2;                                       \
+            if ((capacity) == 0) (capacity) = 8;                   \
+            void* old_data = (ptr);                                \
+            (ptr) = cap_alloc((capacity) * sizeof((ptr)[0]));      \
+            memcpy((ptr), (old_data), (count) * sizeof((ptr)[0])); \
+        }                                                          \
+        (ptr)[(count)++] = (item);                                 \
     } while (0)

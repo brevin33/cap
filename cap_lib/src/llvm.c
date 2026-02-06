@@ -1,15 +1,81 @@
+#include <llvm-c/Core.h>
+#include <llvm-c/ExecutionEngine.h>
+#include <llvm-c/Types.h>
+#include <stddef.h>
+
 #include "cap.h"
+#include "cap/semantics.h"
 
 void llvm_print_module() {
     printf("\n\n LLVM Module:\n");
-    char* ir = LLVMPrintModuleToString(cap_context.llvm_info.active_module);
+    char* ir = LLVMPrintModuleToString(cap_context.llvm_info.module_info.module);
     printf("%s\n", ir);
     printf("---------\n");
     LLVMDisposeMessage(ir);
 }
 
 LLVMTypeRef llvm_get_type(Type* type) {
-    return NULL;
+    switch (type->kind) {
+        case type_int_literal: {
+            return LLVMIntType(64);
+        }
+        case type_float_literal: {
+            return LLVMDoubleType();
+        }
+        case type_function: {
+            if (cap_context.is_in_semantic_analysis) return LLVMPointerType(LLVMIntType(8), 0);
+            return LLVMStructType(NULL, 0, 0);
+        }
+        case type_type: {
+            if (cap_context.is_in_semantic_analysis) return LLVMPointerType(LLVMIntType(8), 0);
+            return LLVMStructType(NULL, 0, 0);
+        }
+        case type_int: {
+            return LLVMIntType(type->int_.bits);
+        }
+        case type_uint: {
+            return LLVMIntType(type->uint.bits);
+        }
+        case type_float: {
+            i64 bits = type->float_.bits;
+            switch (bits) {
+                case 32: {
+                    return LLVMFloatType();
+                }
+                case 64: {
+                    return LLVMDoubleType();
+                }
+                default: {
+                    mabort(str("invalid bits"));
+                }
+            }
+        }
+        case type_multiple_value: {
+            Type_Multiple_Value* multi_value = &type->multiple_value;
+            LLVMTypeRef* llvm_types = cap_alloc(multi_value->types_count * sizeof(LLVMTypeRef));
+            for (u64 i = 0; i < multi_value->types_count; i++) {
+                Type* type = &multi_value->types[i];
+                LLVMTypeRef type_llvm = llvm_get_type(type);
+                llvm_types[i] = type_llvm;
+            }
+            LLVMTypeRef struct_type = LLVMStructType(llvm_types, multi_value->types_count, 0);
+            return struct_type;
+        }
+        case type_void: {
+            return LLVMVoidType();
+        }
+        case type_reference: {
+            return LLVMPointerType(LLVMIntType(8), 0);
+        }
+        case type_pointer: {
+            return LLVMPointerType(LLVMIntType(8), 0);
+        }
+        case type_invalid: {
+            mabort(str("invalid type"));
+            return NULL;
+            break;
+        }
+    }
 }
 
 void llvm_add_variable(Variable* variable) {
@@ -21,30 +87,38 @@ void llvm_add_variable(Variable* variable) {
     llvm_set_variable_value(variable, variable_value);
 }
 
-void llvm_compile_scope(Scope* scope) {
-    return llvm_compile_scope_with_initialized_variables(scope, NULL, 0);
+LLVM_Scope_Info llvm_compile_scope(Scope* scope) {
+    return llvm_compile_scope_with_function_variables(scope, NULL, 0);
 }
 
-void llvm_compile_scope_with_initialized_variables(Scope* scope, Variable* scope_variables_already_initalized, u64 scope_variables_already_initalized_count) {
+LLVM_Scope_Info llvm_compile_scope_with_function_variables(Scope* scope, Variable** scope_variables_already_initalized,
+                                                           u64 scope_variables_already_initalized_count) {
     Scope* last_scope = cap_context.scope;
     cap_context.scope = scope;
-    LLVMBasicBlockRef scope_entry_block = LLVMAppendBasicBlock(cap_context.llvm_info.function_being_built, "scope_entry");
+    Function_Implementation* function_implementation = cap_context.function_being_built;
+    LLVM_Function_Info* function_info = llvm_get_function_info(function_implementation);
+    LLVMBasicBlockRef scope_entry_block = LLVMAppendBasicBlock(function_info->function, "scope_entry");
     LLVMBasicBlockRef last_block = llvm_set_active_block(scope_entry_block);
     LLVM_Scope_Info* scope_info = llvm_add_scope_info(scope);
     scope_info->entry_block = scope_entry_block;
 
     for (u64 i = 0; i < scope->variables_count; i++) {
         Variable* variable = scope->variables[i];
-        bool already_initalized = false;
+        i64 function_variable_index = -1;
         for (u64 j = 0; j < scope_variables_already_initalized_count; j++) {
-            Variable* already_initalized_variable = &scope_variables_already_initalized[j];
-            if (variable == already_initalized_variable) already_initalized = true;
+            Variable* already_initalized_variable = scope_variables_already_initalized[j];
+            if (variable == already_initalized_variable) function_variable_index = j;
         }
-        if (already_initalized) continue;
         llvm_add_variable(variable);
+        if (function_variable_index >= 0) {
+            LLVMValueRef variable_value = llvm_get_variable_value(variable);
+            LLVMValueRef function_value = LLVMGetParam(function_info->function, function_variable_index);
+            LLVMBuildStore(cap_context.llvm_info.builder, function_value, variable_value);
+        }
     }
 
-    LLVMBasicBlockRef scope_statements_block = LLVMAppendBasicBlock(cap_context.llvm_info.function_being_built, "scope_statements");
+    LLVMBasicBlockRef scope_statements_block = LLVMAppendBasicBlock(function_info->function, "scope_statements");
+    LLVMBuildBr(cap_context.llvm_info.builder, scope_statements_block);
     llvm_set_active_block(scope_statements_block);
     ptr_append(scope_info->statements_blocks, scope_info->statements_blocks_count, scope_info->statements_blocks_capacity, scope_statements_block);
 
@@ -54,37 +128,564 @@ void llvm_compile_scope_with_initialized_variables(Scope* scope, Variable* scope
         if (breaks_scope) break;
     }
 
+    LLVM_Scope_Info info = *scope_info;
     llvm_pop_scope_info();
     cap_context.scope = last_scope;
     llvm_set_active_block(last_block);
+    return info;
 }
 
-bool llvm_compile_statement(Statement* statement) {
+Type* __dereference_type__(Type* type) {
+    Type t = sem_type_pointer(type, NULL);
+    Type* type_ptr = cap_alloc(sizeof(Type));
+    *type_ptr = t;
+    return type_ptr;
+}
+
+LLVMValueRef llvm_compile_reference(Expression* expression) {
+    massert(expression->kind == expression_reference, str("expected expression_reference"));
+    Expression* expr = expression->dereference.expr;
+    return llvm_compile_expression(expr);
+}
+
+LLVMValueRef llvm_compile_dereference(Expression* expression) {
+    massert(expression->kind == expression_dereference, str("expected expression_dereference"));
+    Expression* expr = expression->dereference.expr;
+    LLVMValueRef value = llvm_compile_expression(expr);
+    if (expr->type.kind == type_pointer) {
+        return value;
+    } else if (expr->type.kind == type_reference) {
+        LLVMTypeRef type = llvm_get_type(&expression->type);
+        LLVMValueRef deref_value = LLVMBuildLoad2(cap_context.llvm_info.builder, type, value, "deref");
+        return deref_value;
+    } else if (expr->type.kind == type_type) {
+        if (!cap_context.is_in_semantic_analysis) {
+            LLVMTypeRef empty_struct = LLVMStructType(NULL, 0, 0);
+            return LLVMGetUndef(empty_struct);
+        }
+        Type int_type = sem_int_type(8);
+        Type pointer_type = sem_type_pointer(&int_type, expression->ast);
+        Type* pointer_type_ptr = cap_alloc(sizeof(Type));
+        *pointer_type_ptr = pointer_type;
+        Type** pointer_type_ptr_ptr = &pointer_type_ptr->pointer.underlying_type;
+
+        LLVMValueRef type_to_override_int = LLVMConstInt(LLVMIntType(64), (uintptr_t)pointer_type_ptr_ptr, 0);
+        LLVMValueRef type_to_override = LLVMConstIntToPtr(type_to_override_int, LLVMPointerType(LLVMPointerType(LLVMIntType(8), 0), 0));
+        LLVMBuildStore(cap_context.llvm_info.builder, value, type_to_override);
+
+        LLVMValueRef new_pointer_ptr_int = LLVMConstInt(LLVMIntType(64), (uintptr_t)pointer_type_ptr, 0);
+        LLVMValueRef new_pointer_ptr = LLVMConstIntToPtr(new_pointer_ptr_int, LLVMPointerType(LLVMPointerType(LLVMIntType(8), 0), 0));
+        return new_pointer_ptr;
+    } else {
+        mabort(str("trying to derefernce non dereferenceable type"));
+    }
+}
+
+LLVMValueRef llvm_compile_cast_with_valueref(Expression* expression, LLVMValueRef value_of_cast) {
+    massert(expression->kind == expression_cast, str("expected expression_cast"));
+    Expression* underlying_expr = expression->cast.expr;
+    LLVMValueRef underlying_value = value_of_cast;
+    Type* underlying_type = &underlying_expr->type;
+    Type* new_type = &expression->type;
+    if (sem_type_equal_without_allocator(underlying_type, new_type)) return underlying_value;
+
+    switch (new_type->kind) {
+        case type_float_literal: {
+            i64 new_bits = 64;
+            switch (underlying_type->kind) {
+                case type_int_literal: {
+                    i64 old_bits = underlying_type->int_.bits;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildFPExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildFPTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_int: {
+                    i64 old_bits = underlying_type->int_.bits;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildFPExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildFPTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_uint: {
+                    i64 old_bits = underlying_type->uint.bits;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildFPExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildFPTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_float_literal: {
+                    return underlying_value;
+                }
+                case type_float: {
+                    i64 old_bits = underlying_type->float_.bits;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildFPExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildFPTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                default: {
+                    mabort(str("invalid underlying type"));
+                }
+            }
+        }
+        case type_int_literal: {
+            i64 new_bits = 64;
+            switch (underlying_type->kind) {
+                case type_int_literal: {
+                    i64 old_bits = underlying_type->int_.bits;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildSExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_int: {
+                    i64 old_bits = underlying_type->int_.bits;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildSExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_uint: {
+                    i64 old_bits = underlying_type->uint.bits;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildZExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_float_literal: {
+                    return LLVMBuildFPToSI(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                }
+                case type_float: {
+                    return LLVMBuildFPToSI(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                }
+                default: {
+                    mabort(str("invalid underlying type"));
+                }
+            }
+        }
+        case type_int: {
+            i64 new_bits = new_type->int_.bits;
+            switch (underlying_type->kind) {
+                case type_int_literal: {
+                    i64 old_bits = 64;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildSExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_int: {
+                    i64 old_bits = underlying_type->int_.bits;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildSExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_uint: {
+                    i64 old_bits = underlying_type->uint.bits;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildSExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_float_literal: {
+                    return LLVMBuildFPToSI(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                }
+                case type_float: {
+                    return LLVMBuildFPToSI(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                }
+                default: {
+                    mabort(str("invalid underlying type"));
+                }
+            }
+        }
+        case type_uint: {
+            i64 new_bits = new_type->uint.bits;
+            switch (underlying_type->kind) {
+                case type_int_literal: {
+                    i64 old_bits = 64;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildZExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_int: {
+                    i64 old_bits = underlying_type->int_.bits;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildZExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_uint: {
+                    i64 old_bits = underlying_type->uint.bits;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildZExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_float_literal: {
+                    return LLVMBuildFPToUI(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                }
+                case type_float: {
+                    return LLVMBuildFPToUI(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                }
+                default: {
+                    mabort(str("invalid underlying type"));
+                }
+            }
+        }
+        case type_float: {
+            i64 new_bits = new_type->float_.bits;
+            switch (underlying_type->kind) {
+                case type_int_literal: {
+                    return LLVMBuildSIToFP(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                }
+                case type_int: {
+                    return LLVMBuildSIToFP(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                }
+                case type_uint: {
+                    return LLVMBuildUIToFP(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                }
+                case type_float_literal: {
+                    i64 old_bits = 64;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildFPExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildFPTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                case type_float: {
+                    i64 old_bits = underlying_type->float_.bits;
+                    if (new_bits == old_bits) return underlying_value;
+                    else if (new_bits > old_bits) {
+                        return LLVMBuildFPExt(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    } else {
+                        return LLVMBuildFPTrunc(cap_context.llvm_info.builder, underlying_value, llvm_get_type(new_type), "cast");
+                    }
+                }
+                default: {
+                    mabort(str("invalid underlying type"));
+                }
+            }
+        }
+        case type_reference:
+        case type_pointer:
+        case type_type:
+        case type_function:
+        case type_void:
+        case type_multiple_value:
+        case type_invalid: {
+            mabort(str("no known way to cast type"));
+        }
+    }
+}
+
+LLVMValueRef llvm_compile_cast(Expression* expression) {
+    massert(expression->kind == expression_cast, str("expected expression_cast"));
+    Expression* underlying_expr = expression->cast.expr;
+    LLVMValueRef underlying_value = llvm_compile_expression(underlying_expr);
+    return llvm_compile_cast_with_valueref(expression, underlying_value);
+}
+
+LLVM_Function_Info* llvm_build_function(Function_Implementation* function_implementation) {
+    Function_Implementation* last_function_being_built = cap_context.function_being_built;
+    cap_context.function_being_built = function_implementation;
+    LLVM_Function_Info* function_info = llvm_add_function_info(function_implementation);
+
+    // TODO: figure out if we need to pass the parameters allocator
+    LLVMTypeRef* param_types = cap_alloc(function_implementation->parameter_count * sizeof(LLVMTypeRef));
+    for (u64 i = 0; i < function_implementation->parameter_count; i++) {
+        Type* parameter_type = &function_implementation->parameters[i]->type;
+        LLVMTypeRef param_type = llvm_get_type(parameter_type);
+        param_types[i] = param_type;
+    }
+
+    LLVMTypeRef return_type;
+    if (function_implementation->return_types_count == 1) {
+        return_type = llvm_get_type(&function_implementation->return_types[0]);
+    } else {
+        Type multiple_value = sem_type_multiple_value(function_implementation->return_types, function_implementation->return_types_count);
+        return_type = llvm_get_type(&multiple_value);
+    }
+
+    LLVMTypeRef function_type = LLVMFunctionType(return_type, param_types, function_implementation->parameter_count, 0);
+    static u64 function_number = 0;
+    char cName[2048];
+    snprintf(cName, 2048, "$$funtion_name%llu$$", function_number);
+    function_number += 1;
+    LLVMValueRef function_value = LLVMAddFunction(cap_context.llvm_info.module_info.module, cName, function_type);
+    LLVMSetLinkage(function_value, LLVMInternalLinkage);
+    function_info->function_type = function_type;
+    function_info->function = function_value;
+
+    LLVMBasicBlockRef function_entry_block = LLVMAppendBasicBlock(function_value, "function_entry");
+    LLVMBasicBlockRef last_block = llvm_set_active_block(function_entry_block);
+
+    LLVM_Scope_Info info = llvm_compile_scope_with_function_variables(&function_implementation->body, function_implementation->parameters,
+                                                                      function_implementation->parameter_count);
+    LLVMPositionBuilderAtEnd(cap_context.llvm_info.builder, function_entry_block);
+    LLVMBuildBr(cap_context.llvm_info.builder, info.entry_block);
+
+    cap_context.function_being_built = last_function_being_built;
+    llvm_set_active_block(last_block);
+
+    return function_info;
+}
+
+LLVMValueRef llvm_compile_function_call(Expression* expression) {
+    LLVMValueRef* parameters = cap_alloc(expression->function_call.parameter_count * sizeof(LLVMValueRef));
+    for (u64 i = 0; i < expression->function_call.parameter_count; i++) {
+        Expression* parameter = &expression->function_call.parameters[i];
+        LLVMValueRef parameter_value = llvm_compile_expression(parameter);
+        parameters[i] = parameter_value;
+    }
+
+    Function_Implementation* function_implementation = expression->function_call.implementation;
+    LLVM_Function_Info* function_info = llvm_get_function_info(function_implementation);
+
+    LLVMValueRef function_value = LLVMBuildCall2(cap_context.llvm_info.builder, function_info->function_type, function_info->function, parameters,
+                                                 expression->function_call.parameter_count, "call");
+
+    return function_value;
+}
+
+LLVMValueRef llvm_compile_int(Expression* expression) {
+    i64 value = expression->int_value.value;
+    return LLVMConstInt(LLVMIntType(64), value, false);
+}
+
+LLVMValueRef llvm_compile_float(Expression* expression) {
+    f64 value = expression->float_value.value;
+    return LLVMConstReal(LLVMDoubleType(), value);
+}
+
+LLVMValueRef llvm_extract_multiple_values_value(LLVMValueRef value, u64 index, Type* type) {
+    return LLVMBuildExtractValue(cap_context.llvm_info.builder, value, index, "");
+}
+
+LLVMValueRef llvm_compile_multiple_values_access_with_valueref(Expression* expression, LLVMValueRef value_of_multiple_value) {
+    massert(expression->kind == expression_multiple_values_access, str("expected multiple values"));
+    Expression* multiple_values_value = expression->multiple_values_access.multiple_values_value;
+    Type* multiple_values_type = &multiple_values_value->type;
+    return llvm_extract_multiple_values_value(value_of_multiple_value, expression->multiple_values_access.index, multiple_values_type);
+}
+
+LLVMValueRef llvm_compile_multiple_values_access(Expression* expression) {
+    Expression* multiple_values_value = expression->multiple_values_access.multiple_values_value;
+    LLVMValueRef value = llvm_compile_expression(multiple_values_value);
+    return llvm_compile_multiple_values_access_with_valueref(expression, value);
+}
+
+LLVMValueRef llvm_compile_expression(Expression* expression) {
+    switch (expression->kind) {
+        case expression_passthrough:
+            return llvm_compile_expression(expression->passthrough.expr);
+        case expression_variable:
+            return llvm_get_variable_value(expression->variable.variable);
+        case expression_variable_declaration:
+            return llvm_get_variable_value(expression->variable_declaration.variable);
+        case expression_multiple_values_access:
+            return llvm_compile_multiple_values_access(expression);
+        case expression_dereference:
+            return llvm_compile_dereference(expression);
+        case expression_cast:
+            return llvm_compile_cast(expression);
+        case expression_reference:
+            return llvm_compile_reference(expression);
+        case expression_function_call:
+            return llvm_compile_function_call(expression);
+        case expression_int:
+            return llvm_compile_int(expression);
+        case expression_float:
+            return llvm_compile_float(expression);
+        case expression_invalid: {
+            mabort(str("invalid expression"));
+        }
+    }
+}
+
+bool llvm_compile_expression_statement(Statement* statement) {
+    massert(statement->kind == statement_expression, str("expected statement_expression"));
+    Expression* expression = &statement->expression.expression;
+    llvm_compile_expression(expression);
     return false;
 }
 
+bool llvm_compile_assignment_multiple_values_statement(Statement* statement) {
+    massert(statement->kind == statement_assignment_multiple_values, str("expected statement_assignment_multiple_values"));
+    Statement_Assignment_Multiple_Values* assignment = &statement->assignment_multiple_values;
+    LLVMValueRef multiple_values_value = llvm_compile_expression(assignment->multiple_values_value);
+
+    LLVMValueRef* assignee_values = cap_alloc(assignment->count * sizeof(LLVMValueRef));
+    for (u64 i = 0; i < assignment->count; i++) {
+        Expression* assignee = &assignment->assignees[i];
+        LLVMValueRef assignee_value = llvm_compile_expression(assignee);
+        assignee_values[i] = assignee_value;
+    }
+
+    LLVMValueRef* values = cap_alloc(assignment->count * sizeof(LLVMValueRef));
+    for (u64 i = 0; i < assignment->count; i++) {
+        Expression* value = &assignment->values[i];
+        if (value->kind == expression_cast) {
+            Expression* underlying_expr = value->cast.expr;
+            LLVMValueRef underlying_value;
+            if (underlying_expr->kind == expression_multiple_values_access) {
+                underlying_value = llvm_compile_multiple_values_access_with_valueref(underlying_expr, multiple_values_value);
+            } else {
+                mabort(str("expected multiple values access"));
+            }
+            values[i] = llvm_compile_cast_with_valueref(value, underlying_value);
+        } else if (value->kind == expression_multiple_values_access) {
+            values[i] = llvm_compile_multiple_values_access_with_valueref(value, multiple_values_value);
+        } else {
+            mabort(str("expected cast or multiple values access"));
+        }
+    }
+
+    for (u64 i = 0; i < assignment->count; i++) {
+        LLVMValueRef assignee_value = assignee_values[i];
+        LLVMValueRef value_value = values[i];
+        Expression* value = &assignment->values[i];
+        Expression* assignee = &assignment->assignees[i];
+        Type* assignee_type = &assignee->type;
+        Type* value_type = &value->type;
+        massert(assignee_type->kind == type_reference, str("expected pointer"));
+        LLVMTypeRef value_type_llvm = llvm_get_type(value_type);
+        LLVMBuildStore(cap_context.llvm_info.builder, value_value, assignee_value);
+    }
+    return false;
+}
+
+bool llvm_compile_assignment_statement(Statement* statement) {
+    massert(statement->kind == statement_assignment, str("expected statement_assignment"));
+    Statement_Assignment* assignment = &statement->assignment;
+    massert(assignment->assignees_count >= assignment->values_count, str("expected assignees_count to be greater than or equal to values_count"));
+    LLVMValueRef* assignee_values = cap_alloc(assignment->assignees_count * sizeof(LLVMValueRef));
+    for (u64 i = 0; i < assignment->assignees_count; i++) {
+        Expression* assignee = &assignment->assignees[i];
+        LLVMValueRef assignee_value = llvm_compile_expression(assignee);
+        assignee_values[i] = assignee_value;
+    }
+    for (u64 i = 0; i < assignment->values_count; i++) {
+        Expression* value = &assignment->values[i];
+        LLVMValueRef value_value = llvm_compile_expression(value);
+
+        LLVMValueRef assignee_value = assignee_values[i];
+        Expression* assignee = &assignment->assignees[i];
+        Type* assignee_type = &assignee->type;
+        massert(assignee_type->kind == type_reference, str("expected pointer"));
+        Type* value_type = &value->type;
+        LLVMTypeRef value_type_llvm = llvm_get_type(value_type);
+        LLVMBuildStore(cap_context.llvm_info.builder, value_value, assignee_value);
+    }
+
+    return false;
+}
+
+bool llvm_compile_return_statement(Statement* statement) {
+    massert(statement->kind == statement_return, str("expected statement_return"));
+    if (statement->return_.values_count == 0) {
+        LLVMBuildRetVoid(cap_context.llvm_info.builder);
+        return true;
+    }
+
+    LLVMValueRef* values = cap_alloc(statement->return_.values_count * sizeof(LLVMValueRef));
+    for (u64 i = 0; i < statement->return_.values_count; i++) {
+        Expression* expression = &statement->return_.values[i];
+        LLVMValueRef value = llvm_compile_expression(expression);
+        values[i] = value;
+    }
+
+    LLVMValueRef return_value;
+    if (statement->return_.values_count == 1) {
+        return_value = values[0];
+    } else {
+        Function_Implementation* function_implementation = cap_context.function_being_built;
+        Type multiple_type = sem_type_multiple_value(function_implementation->return_types, function_implementation->return_types_count);
+        LLVMTypeRef multiple_type_llvm = llvm_get_type(&multiple_type);
+        LLVMValueRef struct_value = LLVMGetUndef(multiple_type_llvm);
+        for (u64 i = 0; i < statement->return_.values_count; i++) {
+            LLVMValueRef value = values[i];
+            struct_value = LLVMBuildInsertValue(cap_context.llvm_info.builder, struct_value, value, i, "");
+        }
+        return_value = struct_value;
+    }
+
+    LLVMBuildRet(cap_context.llvm_info.builder, return_value);
+    return true;
+}
+
+bool llvm_compile_statement(Statement* statement) {
+    switch (statement->kind) {
+        case statement_expression: {
+            return llvm_compile_expression_statement(statement);
+        }
+        case statement_assignment_multiple_values: {
+            return llvm_compile_assignment_multiple_values_statement(statement);
+        }
+        case statement_assignment: {
+            return llvm_compile_assignment_statement(statement);
+        }
+        case statement_return: {
+            return llvm_compile_return_statement(statement);
+        }
+        case statement_invalid: {
+            log_error("invalid statement");
+            return false;
+        }
+    }
+}
+
 void llvm_compile_program(Program* program) {
-    LLVMModuleRef last_module = cap_context.llvm_info.active_module;
-    char cName[2048];
-    snprintf(cName, 2048, "%.*s.ll", str_info(program->name));
-    LLVMModuleRef program_module = LLVMModuleCreateWithName(cName);
-    cap_context.llvm_info.active_module = program_module;
-
-    LLVMTypeRef main_function_type = LLVMFunctionType(LLVMInt32Type(), NULL, 0, false);
-    LLVMValueRef main_function_value = LLVMAddFunction(cap_context.llvm_info.active_module, "main", main_function_type);
-    cap_context.llvm_info.function_being_built = main_function_value;
-
-    LLVMBasicBlockRef main_entry_block = LLVMAppendBasicBlock(main_function_value, "program_entry");
-    llvm_set_active_block(main_entry_block);
+    LLVM_Module_Info last_module = llvm_create_new_module();
+    Function_Implementation* last_function_being_built = cap_context.function_being_built;
 
     Function* main_function = &program->function;
     Function_Implementation* main_function_implementation = main_function->implementations[0];
     Scope* main_function_scope = &main_function_implementation->body;
 
+    cap_context.function_being_built = main_function_implementation;
+
+    LLVMTypeRef main_function_type = LLVMFunctionType(LLVMInt32Type(), NULL, 0, 0);
+    LLVMValueRef main_function_value = LLVMAddFunction(cap_context.llvm_info.module_info.module, "main", main_function_type);
+    LLVM_Function_Info* function_info = llvm_add_function_info(main_function_implementation);
+    function_info->function = main_function_value;
+    function_info->function_type = main_function_type;
+
+    LLVM_Scope_Info scope_info = llvm_compile_scope(main_function_scope);
+    LLVMBasicBlockRef entry_block = scope_info.entry_block;
+
     llvm_print_module();
 
     char* error;
-    if (LLVMVerifyModule(cap_context.llvm_info.active_module, LLVMAbortProcessAction, &error) != 0) {
+    if (LLVMVerifyModule(cap_context.llvm_info.module_info.module, LLVMAbortProcessAction, &error) != 0) {
         String error_str = string_create(error, strlen(error));
         String error_message = string_append(str("Failed to verify module: "), error_str);
         mabort(error_message);
@@ -94,7 +695,8 @@ void llvm_compile_program(Program* program) {
     String object_file_path = string_append(cap_context.build_directory, object_file_name);
     char object_file_pathc[4096];
     snprintf(object_file_pathc, 4096, "%.*s", str_info(object_file_path));
-    if (LLVMTargetMachineEmitToFile(cap_context.llvm_info.target_machine, program_module, object_file_pathc, LLVMObjectFile, &error) != 0) {
+    if (LLVMTargetMachineEmitToFile(cap_context.llvm_info.target_machine, cap_context.llvm_info.module_info.module, object_file_pathc, LLVMObjectFile,
+                                    &error) != 0) {
         String error_str = string_create(error, strlen(error));
         String error_message = string_append(str("Failed to emit object file: "), error_str);
         mabort(error_message);
@@ -106,8 +708,77 @@ void llvm_compile_program(Program* program) {
         mabort(str("Failed to link executable"));
     };
 
-    LLVMDisposeModule(program_module);
-    cap_context.llvm_info.active_module = last_module;
+    // run executable
+    char commandc[4096];
+    snprintf(commandc, 4096, "%.*s", str_info(exe_file_path));
+    printf("command: %s\n", commandc);
+    int result = system(commandc);
+    rainbow_printf("\nresult: %d\n", result);
+
+    LLVMDisposeModule(cap_context.llvm_info.module_info.module);
+    cap_context.llvm_info.module_info = last_module;
+    cap_context.function_being_built = last_function_being_built;
+}
+
+// last module
+LLVM_Module_Info llvm_create_new_module() {
+    LLVM_Module_Info last_module_info = cap_context.llvm_info.module_info;
+    static u64 module_number = 0;
+    char cName[2048];
+    snprintf(cName, 2048, "__compiler_module__%llu", module_number);
+    LLVMModuleRef program_module = LLVMModuleCreateWithName(cName);
+    cap_context.llvm_info.module_info.module = program_module;
+    return last_module_info;
+}
+
+void* llvm_evaluate_expression(Expression* expression) {
+    LLVM_Module_Info last_module = llvm_create_new_module();
+
+    static u64 function_number = 0;
+    char cFunctionName[2048];
+    snprintf(cFunctionName, 2048, "__expr_function__%llu", function_number);
+    function_number += 1;
+    LLVMTypeRef main_function_type = LLVMFunctionType(LLVMVoidType(), NULL, 0, 0);
+    LLVMValueRef main_function_value = LLVMAddFunction(cap_context.llvm_info.module_info.module, cFunctionName, main_function_type);
+
+    LLVM_Function_Info* info = llvm_add_function_info(NULL);
+    info->function = main_function_value;
+    info->function_type = main_function_type;
+    Function_Implementation* last_function_being_built = cap_context.function_being_built;
+    cap_context.function_being_built = NULL;
+
+    LLVMBasicBlockRef main_entry_block = LLVMAppendBasicBlock(main_function_value, "program_entry");
+    llvm_set_active_block(main_entry_block);
+
+    LLVMValueRef expression_value = llvm_compile_expression(expression);
+
+    LLVMTypeRef expression_type = llvm_get_type(&expression->type);
+    u64 expression_type_size = LLVMSizeOfTypeInBits(cap_context.llvm_info.data_layout, expression_type);
+    void* return_memory = cap_alloc(expression_type_size);
+
+    LLVMValueRef memory = LLVMConstInt(LLVMInt64Type(), (uintptr_t)return_memory, 0);
+    memory = LLVMConstIntToPtr(memory, LLVMPointerType(expression_type, 0));
+
+    LLVMBuildStore(cap_context.llvm_info.builder, expression_value, memory);
+    LLVMBuildRetVoid(cap_context.llvm_info.builder);
+
+    llvm_print_module();
+
+    LLVMExecutionEngineRef engine = {0};
+    char* error = NULL;
+    if (LLVMCreateInterpreterForModule(&engine, cap_context.llvm_info.module_info.module, &error) != 0) {
+        fprintf(stderr, "Failed to create interpreter: %s\n", error);
+        LLVMDisposeMessage(error);
+        mabort(str("Failed to create interpreter"));
+    }
+    LLVMGenericValueRef result = LLVMRunFunction(engine, main_function_value, 0, NULL);
+
+    cap_context.llvm_info.module_info = last_module;
+    cap_context.function_being_built = last_function_being_built;
+
+    LLVMDisposeGenericValue(result);
+    LLVMDisposeExecutionEngine(engine);
+    return return_memory;
 }
 
 bool llvm_link_executable(String exe_file_path, String* object_file_paths, u64 count) {
@@ -137,21 +808,35 @@ void llvm_set_variable_value(Variable* variable, LLVMValueRef value) {
     ptr_append(scope_info->variable_to_values, scope_info->variable_to_values_count, scope_info->variable_to_values_capacity, pair);
 }
 
-LLVMValueRef llvm_get_variable_value(Variable* variable) {
-    Scope* scope = cap_context.scope;
+LLVMValueRef _llvm_get_variable_value(Variable* variable, Scope* scope) {
     LLVM_Scope_Info* scope_info = llvm_get_scope_info(scope);
-    for (u64 i = scope_info->variable_to_values_count - 1; i >= 0; i--) {
+    for (i64 i = (i64)scope_info->variable_to_values_count - 1; i >= 0; i--) {
         LLVMValue_Variable_Pair pair = scope_info->variable_to_values[i];
         if (pair.variable == variable) return pair.value;
     }
-    if (scope->parent != NULL) return llvm_get_variable_value(variable);
+    if (scope->parent != NULL) return _llvm_get_variable_value(variable, scope->parent);
     mabort(str("variable not found"));
     return NULL;
 }
 
+LLVMValueRef llvm_get_variable_value(Variable* variable) {
+    if (cap_context.is_in_semantic_analysis && variable->know_compile_time_value) {
+        void* value = variable->compile_time_value;
+        Type* type = value;
+        LLVMValueRef ptr_as_int = LLVMConstInt(LLVMIntType(64), (uintptr_t)value, 0);
+        LLVMValueRef llvm_ptr = LLVMConstIntToPtr(ptr_as_int, LLVMPointerType(LLVMIntType(8), 0));
+        return llvm_ptr;
+    } else if (!cap_context.is_in_semantic_analysis && variable->type.kind == type_type) {
+        LLVMTypeRef empty_struct = LLVMStructType(NULL, 0, 0);
+        return LLVMBuildAlloca(cap_context.llvm_info.builder, empty_struct, "empty_struct");
+    }
+    Scope* scope = cap_context.scope;
+    return _llvm_get_variable_value(variable, scope);
+}
+
 LLVM_Scope_Info* llvm_get_scope_info(Scope* scope) {
-    for (u64 i = cap_context.llvm_info.scope_infos_count - 1; i >= 0; i--) {
-        LLVM_Scope_Info_Scope_Pair* pair = &cap_context.llvm_info.scope_infos[i];
+    for (i64 i = cap_context.llvm_info.module_info.scope_infos_count - 1; i >= 0; i--) {
+        LLVM_Scope_Info_Scope_Pair* pair = &cap_context.llvm_info.module_info.scope_infos[i];
         if (pair->scope == scope) return &pair->scope_info;
     }
     mabort(str("scope not found"));
@@ -161,10 +846,27 @@ LLVM_Scope_Info* llvm_get_scope_info(Scope* scope) {
 LLVM_Scope_Info* llvm_add_scope_info(Scope* scope) {
     LLVM_Scope_Info scope_info = {0};
     LLVM_Scope_Info_Scope_Pair pair = {scope, scope_info};
-    ptr_append(cap_context.llvm_info.scope_infos, cap_context.llvm_info.scope_infos_count, cap_context.llvm_info.scope_infos_capacity, pair);
-    return &cap_context.llvm_info.scope_infos[cap_context.llvm_info.scope_infos_count - 1].scope_info;
+    ptr_append(cap_context.llvm_info.module_info.scope_infos, cap_context.llvm_info.module_info.scope_infos_count,
+               cap_context.llvm_info.module_info.scope_infos_capacity, pair);
+    return &cap_context.llvm_info.module_info.scope_infos[cap_context.llvm_info.module_info.scope_infos_count - 1].scope_info;
 }
 
 void llvm_pop_scope_info() {
-    cap_context.llvm_info.scope_infos_count--;
+    cap_context.llvm_info.module_info.scope_infos_count--;
+}
+
+LLVM_Function_Info* llvm_add_function_info(Function_Implementation* function_implementation) {
+    LLVM_Function_Info function_info = {0};
+    LLVM_Function_Info_Function_Implementation_Pair pair = {function_implementation, function_info};
+    ptr_append(cap_context.llvm_info.module_info.function_infos, cap_context.llvm_info.module_info.function_infos_count,
+               cap_context.llvm_info.module_info.function_infos_capacity, pair);
+    return &cap_context.llvm_info.module_info.function_infos[cap_context.llvm_info.module_info.function_infos_count - 1].function_info;
+}
+
+LLVM_Function_Info* llvm_get_function_info(Function_Implementation* function_implementation) {
+    for (i64 i = cap_context.llvm_info.module_info.function_infos_count - 1; i >= 0; i--) {
+        LLVM_Function_Info_Function_Implementation_Pair* pair = &cap_context.llvm_info.module_info.function_infos[i];
+        if (pair->function_implementation == function_implementation) return &pair->function_info;
+    }
+    return llvm_build_function(function_implementation);
 }

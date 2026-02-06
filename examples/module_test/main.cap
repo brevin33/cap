@@ -1,5 +1,7 @@
 include "module" as mod
 
 program main{
+    i32* a
+    i32 b = a
     return 0
-}
+} 

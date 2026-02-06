@@ -1,15 +1,20 @@
 #include "cap.h"
 
-void log_error(const char* message, ...) {
+void log_errorv(const char* message, va_list args) {
     if (!cap_context.log) return;
     cap_context.error_count++;
     printf("\x1b[31m");
-    va_list args;
-    va_start(args, message);
     printf("Error: ");
     vprintf(message, args);
-    va_end(args);
+    printf("\n");
     printf("\x1b[0m");
+}
+
+void log_error(const char* message, ...) {
+    va_list args;
+    va_start(args, message);
+    log_errorv(message, args);
+    va_end(args);
 }
 
 void log_error_substring(String substring, const char* message, ...) {
@@ -46,6 +51,13 @@ void log_error_token(Cap_File* file, Token token, const char* message, ...) {
 }
 
 void log_error_ast(Ast* ast, const char* message, ...) {
+    if (ast == NULL) {
+        va_list args;
+        va_start(args, message);
+        log_errorv(message, args);
+        va_end(args);
+        return;
+    }
     if (!cap_context.log) return;
     cap_context.error_count++;
     printf("\x1b[31m");
@@ -63,15 +75,20 @@ void log_error_ast(Ast* ast, const char* message, ...) {
     printf("\x1b[0m");
 }
 
-void log_warning(const char* message, ...) {
+void log_warningv(const char* message, va_list args) {
     if (!cap_context.log) return;
     printf("\x1b[33m");
-    va_list args;
-    va_start(args, message);
     printf("Warning: ");
     vprintf(message, args);
-    va_end(args);
+    printf("\n");
     printf("\x1b[0m");
+}
+
+void log_warning(const char* message, ...) {
+    va_list args;
+    va_start(args, message);
+    log_warningv(message, args);
+    va_end(args);
 }
 
 void log_warning_substring(String substring, const char* message, ...) {
@@ -104,6 +121,13 @@ void log_warning_token(Cap_File* file, Token token, const char* message, ...) {
 }
 
 void log_warning_ast(Ast* ast, const char* message, ...) {
+    if (ast == NULL) {
+        va_list args;
+        va_start(args, message);
+        log_warningv(message, args);
+        va_end(args);
+        return;
+    }
     if (!cap_context.log) return;
     printf("\x1b[33m");
     String substring = ast_get_substring(ast);
@@ -119,15 +143,20 @@ void log_warning_ast(Ast* ast, const char* message, ...) {
     printf("\x1b[0m");
 }
 
-void log_info(const char* message, ...) {
+void log_infov(const char* message, va_list args) {
     if (!cap_context.log) return;
     printf("\x1b[34m");
-    va_list args;
-    va_start(args, message);
     printf("Info: ");
     vprintf(message, args);
-    va_end(args);
+    printf("\n");
     printf("\x1b[0m");
+}
+
+void log_info(const char* message, ...) {
+    va_list args;
+    va_start(args, message);
+    log_infov(message, args);
+    va_end(args);
 }
 
 void log_info_substring(String substring, const char* message, ...) {
@@ -160,6 +189,13 @@ void log_info_token(Cap_File* file, Token token, const char* message, ...) {
 }
 
 void log_info_ast(Ast* ast, const char* message, ...) {
+    if (ast == NULL) {
+        va_list args;
+        va_start(args, message);
+        log_infov(message, args);
+        va_end(args);
+        return;
+    }
     if (!cap_context.log) return;
     printf("\x1b[34m");
     String substring = ast_get_substring(ast);
@@ -175,15 +211,19 @@ void log_info_ast(Ast* ast, const char* message, ...) {
     printf("\x1b[0m");
 }
 
-void log_success(const char* message, ...) {
+void log_successv(const char* message, va_list args) {
     if (!cap_context.log) return;
     printf("\x1b[32m");
+    vprintf(message, args);
+    printf("\n");
+    printf("\x1b[0m");
+}
+
+void log_success(const char* message, ...) {
     va_list args;
     va_start(args, message);
-    printf("Success: ");
-    vprintf(message, args);
+    log_successv(message, args);
     va_end(args);
-    printf("\x1b[0m");
 }
 
 void log_success_substring(String substring, const char* message, ...) {
@@ -216,6 +256,13 @@ void log_success_token(Cap_File* file, Token token, const char* message, ...) {
 }
 
 void log_success_ast(Ast* ast, const char* message, ...) {
+    if (ast == NULL) {
+        va_list args;
+        va_start(args, message);
+        log_successv(message, args);
+        va_end(args);
+        return;
+    }
     if (!cap_context.log) return;
     printf("\x1b[32m");
     String substring = ast_get_substring(ast);
@@ -288,4 +335,39 @@ void _log_chunk(const char* message, va_list args, Cap_File* file, String substr
         printf("\n");
         walk++;
     }
+}
+
+void rainbow_printf(const char* format, ...) {
+    const char* rainbow_colors[] = {
+        "\033[31m",  // Red
+        "\033[33m",  // Yellow
+        "\033[32m",  // Green
+        "\033[36m",  // Cyan
+        "\033[34m",  // Blue
+        "\033[35m",  // Magenta
+    };
+    char buffer[4096];
+    va_list args;
+
+    // Format the string with variable arguments
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    // Print each character with a different color
+    int num_colors = 6;
+    int color_index = 0;
+    for (int i = 0; buffer[i] != '\0'; i++) {
+        // Skip color cycling for whitespace
+        if (buffer[i] == ' ' || buffer[i] == '\n' || buffer[i] == '\t') {
+            printf("%c", buffer[i]);
+        } else {
+            printf("%s%c", rainbow_colors[color_index], buffer[i]);
+            color_index = (color_index + 1) % num_colors;
+        }
+    }
+
+    // Reset color at the end
+    printf("\x1b[0m");
+    fflush(stdout);
 }

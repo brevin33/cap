@@ -17,17 +17,12 @@ typedef struct Cap_LLVM_Context Cap_LLVM_Context;
 
 struct Cap_LLVM_Context {
     LLVMContextRef llvm_context;
-    LLVMModuleRef active_module;
     LLVMBuilderRef builder;
     LLVMTargetDataRef data_layout;
     LLVMTargetMachineRef target_machine;
     LLVMTargetRef target;
     LLVMBasicBlockRef active_block;
-    LLVMValueRef function_being_built;
-
-    LLVM_Scope_Info_Scope_Pair* scope_infos;
-    u64 scope_infos_count;
-    u64 scope_infos_capacity;
+    LLVM_Module_Info module_info;
 };
 
 struct Cap_Context {
@@ -52,9 +47,19 @@ struct Cap_Context {
 
     Function_Implementation* function_being_built;
 
+    Expression** expression_to_complete;
+    u64 expression_to_complete_count;
+    u64 expression_to_complete_capacity;
+
+    u64 expression_to_complete_index;
+
+    u64 implementation_to_complete_recursion_counter;
+
     String build_directory;
 
     Cap_LLVM_Context llvm_info;
+
+    bool is_in_semantic_analysis;
 };
 
 struct Cap_File {

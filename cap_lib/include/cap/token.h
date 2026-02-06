@@ -13,6 +13,7 @@ typedef enum Token_Kind {
     token_return,
     token_if,
     token_as,
+    token_struct,
     token_end_statement,
     token_end_file,
     token_int,

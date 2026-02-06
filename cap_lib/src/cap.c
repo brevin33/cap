@@ -89,6 +89,7 @@ Cap_Folder* cap_create_folder(String path, Cap_Folder** visited_folders, u64 vis
         }
     }
 
+    cap_context.is_in_semantic_analysis = true;
     cap_context.scope = &cap_context.global_scope;
     cap_context.namespace_we_are_in = folder->namespace_id;
 
@@ -104,10 +105,14 @@ Cap_Folder* cap_create_folder(String path, Cap_Folder** visited_folders, u64 vis
             Function function = sem_function_parse(function_ast);
             Function* function_ptr = cap_alloc(sizeof(Function));
             *function_ptr = function;
-            Compile_Time_Value compile_time_value = {0};
-            compile_time_value.function = function_ptr;
-            compile_time_value.has_value = true;
-            Variable* var = sem_add_variable(function_ast->function_declaration.name, function.function_type, function_ast, compile_time_value);
+            Variable* var = sem_add_variable(function_ast->function_declaration.name, function.function_type, function_ast);
+            var->is_type_complete = false;
+            var->know_compile_time_value = true;
+            var->compile_time_value = cap_alloc(sizeof(Function*));
+            *(void**)var->compile_time_value = function_ptr;
+        }
+
+        for (u64 j = 0; j < ast->top_level.assignments_count; j++) {
         }
     }
 
@@ -123,6 +128,14 @@ Cap_Folder* cap_create_folder(String path, Cap_Folder** visited_folders, u64 vis
         }
     }
 
+    for (; cap_context.expression_to_complete_index < cap_context.expression_to_complete_count; cap_context.expression_to_complete_index++) {
+        Expression* expr = cap_context.expression_to_complete[cap_context.expression_to_complete_index];
+        sem_complete_expression(expr);
+    }
+
+    if (cap_context.error_count > 0) return folder;
+
+    cap_context.is_in_semantic_analysis = false;
     for (u64 i = 0; i < folder->programs_count; i++) {
         Program* program = &folder->programs[i];
         llvm_compile_program(program);
@@ -160,6 +173,13 @@ void cap_init_context(String path) {
     cap_context.folders = cap_alloc(cap_context.folders_capacity * sizeof(Cap_Folder*));
     cap_context.folders_count = 0;
 
+    cap_context.expression_to_complete_capacity = 8;
+    cap_context.expression_to_complete_count = 0;
+    cap_context.expression_to_complete = cap_alloc(cap_context.expression_to_complete_capacity * sizeof(Expression*));
+    cap_context.expression_to_complete_index = 0;
+
+    cap_context.implementation_to_complete_recursion_counter = 0;
+
     cap_context.global_scope = (Scope){0};
     cap_context.global_scope.variables_capacity = 8;
     cap_context.global_scope.variables_count = 0;
@@ -171,34 +191,45 @@ void cap_init_context(String path) {
 
     cap_context.scope = &cap_context.global_scope;
 
-    Compile_Time_Value compile_time_value = {0};
-    compile_time_value.has_value = true;
-    compile_time_value.underlying_type = cap_alloc(sizeof(Type));
-    *compile_time_value.underlying_type = sem_void_type();
-    Variable* void_var = sem_add_variable(str("void"), sem_type_type(), NULL, compile_time_value);
+    cap_context.is_in_semantic_analysis = false;
 
-    compile_time_value.underlying_type = cap_alloc(sizeof(Type));
-    *compile_time_value.underlying_type = sem_type_type();
-    Variable* type_var = sem_add_variable(str("type"), sem_type_type(), NULL, compile_time_value);
+    Type* type = cap_alloc(sizeof(Type));
+    *type = sem_void_type();
+    Variable* void_var = sem_add_variable(str("void"), sem_type_type(), NULL);
+    void_var->know_compile_time_value = true;
+    void_var->compile_time_value = cap_alloc(sizeof(Type**));
+    *(void**)void_var->compile_time_value = type;
+
+    type = cap_alloc(sizeof(Type));
+    *type = sem_type_type();
+    Variable* type_var = sem_add_variable(str("type"), sem_type_type(), NULL);
+    type_var->know_compile_time_value = true;
+    type_var->compile_time_value = cap_alloc(sizeof(Type**));
+    *(void**)type_var->compile_time_value = type;
 
     for (u64 i = 0; i < 256; i++) {
         String number_str = string_int(i);
 
-        compile_time_value.underlying_type = cap_alloc(sizeof(Type));
-        *compile_time_value.underlying_type = sem_int_type(i);
-        Variable* int_var = sem_add_variable(string_append(str("i"), number_str), sem_type_type(), NULL, compile_time_value);
+        type = cap_alloc(sizeof(Type));
+        *type = sem_int_type(i);
+        Variable* int_var = sem_add_variable(string_append(str("i"), number_str), sem_type_type(), NULL);
+        int_var->know_compile_time_value = true;
+        int_var->compile_time_value = cap_alloc(sizeof(Type**));
+        *(void**)int_var->compile_time_value = type;
 
-        compile_time_value.underlying_type = cap_alloc(sizeof(Type));
-        *compile_time_value.underlying_type = sem_float_type(i);
-        Variable* float_var = sem_add_variable(string_append(str("f"), number_str), sem_type_type(), NULL, compile_time_value);
+        type = cap_alloc(sizeof(Type));
+        *type = sem_float_type(i);
+        Variable* float_var = sem_add_variable(string_append(str("f"), number_str), sem_type_type(), NULL);
+        float_var->know_compile_time_value = true;
+        float_var->compile_time_value = cap_alloc(sizeof(Type**));
+        *(void**)float_var->compile_time_value = type;
 
-        compile_time_value.underlying_type = cap_alloc(sizeof(Type));
-        *compile_time_value.underlying_type = sem_bool_type(i);
-        Variable* bool_var = sem_add_variable(string_append(str("b"), number_str), sem_type_type(), NULL, compile_time_value);
-
-        compile_time_value.underlying_type = cap_alloc(sizeof(Type));
-        *compile_time_value.underlying_type = sem_uint_type(i);
-        Variable* uint_var = sem_add_variable(string_append(str("u"), number_str), sem_type_type(), NULL, compile_time_value);
+        type = cap_alloc(sizeof(Type));
+        *type = sem_uint_type(i);
+        Variable* uint_var = sem_add_variable(string_append(str("u"), number_str), sem_type_type(), NULL);
+        uint_var->know_compile_time_value = true;
+        uint_var->compile_time_value = cap_alloc(sizeof(Type**));
+        *(void**)uint_var->compile_time_value = type;
     }
 
     if (path.data[path.length - 1] == '/' || path.data[path.length - 1] == '\\') {
@@ -218,11 +249,12 @@ void cap_init_context(String path) {
     LLVMInitializeAllTargetMCs();
     LLVMInitializeAllAsmPrinters();
     LLVMInitializeAllDisassemblers();
+
     char* triple = LLVMGetDefaultTargetTriple();
 
     cap_context.llvm_info.llvm_context = LLVMContextCreate();
-    cap_context.llvm_info.active_module = NULL;
     cap_context.llvm_info.builder = LLVMCreateBuilder();
+    cap_context.llvm_info.module_info = (LLVM_Module_Info){0};
 
     char* error;
     if (LLVMGetTargetFromTriple(triple, &cap_context.llvm_info.target, &error) != 0) {

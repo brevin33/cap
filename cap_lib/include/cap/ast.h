@@ -22,6 +22,8 @@ typedef struct Ast_Biop Ast_Biop;
 typedef struct Ast_Function_Call Ast_Function_Call;
 typedef struct Ast_String Ast_String;
 typedef struct Ast_Include Ast_Include;
+typedef struct Ast_Struct_Field Ast_Struct_Field;
+typedef struct Ast_Struct Ast_Struct;
 
 typedef enum Ast_Kind {
     ast_invalid = 0,
@@ -56,7 +58,21 @@ typedef enum Ast_Kind {
     ast_function_call,
     ast_string,
     ast_include,
+    ast_struct,
+    ast_struct_field,
 } Ast_Kind;
+
+struct Ast_Struct_Field {
+    Ast* type;
+    String name;
+};
+
+struct Ast_Struct {
+    String name;
+    Ast* parameter_list;
+    Ast* fields;
+    u64 fields_count;
+};
 
 struct Ast_String {
     String* strings;
@@ -70,7 +86,8 @@ struct Ast_Biop {
 };
 
 struct Ast_Return {
-    Ast* value;
+    Ast* values;
+    u64 values_count;
 };
 
 struct Ast_Int {
@@ -131,9 +148,11 @@ struct Ast_Top_Level {
     Ast* programs;
     Ast* functions;
     Ast* includes;
+    Ast* assignments;
     u32 programs_count;
     u32 functions_count;
     u32 includes_count;
+    u32 assignments_count;
 };
 
 struct Ast_Program {
@@ -173,6 +192,8 @@ struct Ast {
         Ast_Function_Call function_call;
         Ast_String string;
         Ast_Include include;
+        Ast_Struct struct_;
+        Ast_Struct_Field struct_field;
     };
 };
 
@@ -203,6 +224,10 @@ Ast ast_function_scope_statement_parse(Tokens tokens, u64* i, Cap_File* file);
 Ast ast_function_call_parse(Tokens tokens, u64* i, Cap_File* file);
 
 Ast ast_return_parse(Tokens tokens, u64* i, Cap_File* file);
+
+Ast ast_struct_parse(Tokens tokens, u64* i, Cap_File* file);
+
+Ast ast_struct_field_parse(Tokens tokens, u64* i, Cap_File* file);
 
 Ast ast_expression_parse(Tokens tokens, u64* i, Cap_File* file, Token_Kind* delimiter, u64 delimiter_count);
 Ast _ast_expression_parse(Tokens tokens, u64* i, Cap_File* file, Token_Kind* delimiter, u64 delimiter_count, u64 precedence);
