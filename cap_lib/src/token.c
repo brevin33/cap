@@ -59,6 +59,7 @@ bool _token_should_insert_endstatement(Token* token) {
         case token_include:
         case token_struct:
             return true;
+        case token_dot:
         case token_hashtag:
         case token_string_block:
         case token_bitwise_xor:
@@ -117,6 +118,8 @@ String token_token_kind_to_string(Token_Kind kind) {
     switch (kind) {
         case token_invalid:
             return str("invalid");
+        case token_dot:
+            return str("dot");
         case token_string_block:
             return str("string_block");
         case token_comma:
@@ -254,6 +257,7 @@ u64 token_precedence(Token_Kind kind) {
             return 9;
         case token_logical_or:
             return 10;
+        case token_dot:
         case token_as:
         case token_paren_open:
         case token_paren_close:
@@ -488,18 +492,28 @@ Tokens token_tokenize(Cap_File* file) {
             content.length = walk - content.data;
             token.kind = _token_get_keyword_kind(content);
         } else if ((c >= '0' && c <= '9') || c == '.') {
-            bool is_float = false;
-            while ((c >= '0' && c <= '9') || c == '.' || c == '_') {
-                if (c == '.') {
-                    if (is_float) break;
-                    is_float = true;
-                }
+            bool is_dot = false;
+            if (c == '.') {
                 c = *++walk;
+                if (!(c >= '0' && c <= '9')) {
+                    token.kind = token_dot;
+                    is_dot = true;
+                }
             }
-            if (is_float) {
-                token.kind = token_float;
-            } else {
-                token.kind = token_int;
+            if (!is_dot) {
+                bool is_float = false;
+                while ((c >= '0' && c <= '9') || c == '.' || c == '_') {
+                    if (c == '.') {
+                        if (is_float) break;
+                        is_float = true;
+                    }
+                    c = *++walk;
+                }
+                if (is_float) {
+                    token.kind = token_float;
+                } else {
+                    token.kind = token_int;
+                }
             }
         } else if (c == '{') {
             walk++;

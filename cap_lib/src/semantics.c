@@ -4,6 +4,20 @@
 #include "cap/ast.h"
 
 String sem_type_to_string(Type* type) {
+    switch (type->origin.kind) {
+        case type_variable_origin: {
+            Variable* variable = type->origin.variable;
+            String name = variable->name;
+            return name;
+        }
+        case type_intrisic_origin: {
+            break;
+        }
+        case type_call_origin: {
+            massert(false, str("not implemented"));
+            break;
+        }
+    }
     switch (type->kind) {
         case type_int_literal: {
             return str("int_literal");
@@ -32,6 +46,28 @@ String sem_type_to_string(Type* type) {
         }
         case type_type: {
             return str("type");
+        }
+        case type_struct: {
+            String str = str("struct{");
+
+            for (u64 i = 0; i < type->struct_.field_count; i++) {
+                str = string_append(str, str("field("));
+
+                Type* field_type = type->struct_.field_types[i];
+                String field_type_str = sem_type_to_string(field_type);
+                str = string_append(str, field_type_str);
+
+                str = string_append(str, str(" "));
+
+                String field_name = type->struct_.field_names[i];
+                str = string_append(str, field_name);
+
+                str = string_append(str, str(")"));
+                if (i != type->struct_.field_count - 1) str = string_append(str, str(", "));
+            }
+
+            str = string_append(str, str("}"));
+            return str;
         }
         case type_invalid:
             return str("invalid");
@@ -98,6 +134,8 @@ Type sem_type_type() {
     Type type = {0};
     type.kind = type_type;
     type.allocator_id = NO_ALLOCATOR_ID;
+    type.origin.kind = type_intrisic_origin;
+    type.origin.previous = NULL;
     return type;
 }
 
@@ -105,6 +143,8 @@ Type sem_void_type() {
     Type type = {0};
     type.kind = type_void;
     type.allocator_id = NO_ALLOCATOR_ID;
+    type.origin.kind = type_intrisic_origin;
+    type.origin.previous = NULL;
     return type;
 }
 
@@ -113,6 +153,8 @@ Type sem_int_type(i64 bits) {
     type.kind = type_int;
     type.int_.bits = bits;
     type.allocator_id = NO_ALLOCATOR_ID;
+    type.origin.kind = type_intrisic_origin;
+    type.origin.previous = NULL;
     return type;
 }
 
@@ -121,6 +163,8 @@ Type sem_uint_type(i64 bits) {
     type.kind = type_uint;
     type.uint.bits = bits;
     type.allocator_id = NO_ALLOCATOR_ID;
+    type.origin.kind = type_intrisic_origin;
+    type.origin.previous = NULL;
     return type;
 }
 
@@ -129,6 +173,8 @@ Type sem_float_type(i64 bits) {
     type.kind = type_float;
     type.float_.bits = bits;
     type.allocator_id = NO_ALLOCATOR_ID;
+    type.origin.kind = type_intrisic_origin;
+    type.origin.previous = NULL;
     return type;
 }
 
@@ -142,6 +188,20 @@ Type sem_type_reference(Type* underlying_type, Ast* ast_for_error) {
     type.reference.underlying_type = cap_alloc(sizeof(Type));
     *type.reference.underlying_type = *underlying_type;
     type.allocator_id = sem_get_new_allocator_id();
+    type.origin.kind = type_intrisic_origin;
+    type.origin.previous = NULL;
+    return type;
+}
+
+Type sem_type_struct(String* field_names, u64 field_names_count, Type** field_types, u64 field_types_count) {
+    Type type = {0};
+    type.kind = type_struct;
+    type.struct_.field_names = field_names;
+    type.struct_.field_types = field_types;
+    type.struct_.field_count = field_types_count;
+    type.allocator_id = sem_get_new_allocator_id();
+    type.origin.kind = type_intrisic_origin;
+    type.origin.previous = NULL;
     return type;
 }
 
@@ -155,6 +215,8 @@ Type sem_type_pointer(Type* underlying_type, Ast* ast_for_error) {
     type.pointer.underlying_type = cap_alloc(sizeof(Type));
     *type.pointer.underlying_type = *underlying_type;
     type.allocator_id = sem_get_new_allocator_id();
+    type.origin.kind = type_intrisic_origin;
+    type.origin.previous = NULL;
     return type;
 }
 
@@ -162,6 +224,8 @@ Type sem_type_int_literal() {
     Type type = {0};
     type.kind = type_int_literal;
     type.allocator_id = NO_ALLOCATOR_ID;
+    type.origin.kind = type_intrisic_origin;
+    type.origin.previous = NULL;
     return type;
 }
 
@@ -169,6 +233,8 @@ Type sem_type_float_literal() {
     Type type = {0};
     type.kind = type_float_literal;
     type.allocator_id = NO_ALLOCATOR_ID;
+    type.origin.kind = type_intrisic_origin;
+    type.origin.previous = NULL;
     return type;
 }
 
@@ -176,6 +242,8 @@ Type sem_type_invalid() {
     Type type = {0};
     type.kind = type_invalid;
     type.allocator_id = NO_ALLOCATOR_ID;
+    type.origin.kind = type_intrisic_origin;
+    type.origin.previous = NULL;
     return type;
 }
 
@@ -185,6 +253,7 @@ Type sem_type_multiple_value(Type* types, u64 types_count) {
     type.multiple_value.types = types;
     type.multiple_value.types_count = types_count;
     type.allocator_id = NO_ALLOCATOR_ID;
+    type.origin.previous = NULL;
     return type;
 }
 
@@ -215,6 +284,11 @@ Type sem_type_underlying_type(Type* type) {
 
 Type sem_type_new_allocator_ids(Type* type) {
     switch (type->kind) {
+        case type_struct: {
+            Type new_type = *type;
+            new_type.allocator_id = sem_get_new_allocator_id();
+            return new_type;
+        }
         case type_multiple_value: {
             Type_Multiple_Value* multi_value = &type->multiple_value;
             Type_Multiple_Value new_multi_value = *multi_value;
@@ -288,13 +362,13 @@ Type sem_type_new_allocator_ids(Type* type) {
 bool sem_type_is_reference_of(Type* type, Type* underlying_type) {
     massert(type->kind == type_pointer, str("expected pointer"));
     Type ptr_underlying_type = sem_type_underlying_type(type);
-    return sem_type_equal_without_allocator(&ptr_underlying_type, underlying_type);
+    return sem_type_equal(&ptr_underlying_type, underlying_type, false, true);
 }
 
 bool sem_type_is_ptr_to(Type* type, Type* underlying_type) {
     massert(type->kind == type_reference, str("expected reference"));
     Type ref_underlying_type = sem_type_underlying_type(type);
-    return sem_type_equal_without_allocator(&ref_underlying_type, underlying_type);
+    return sem_type_equal(&ref_underlying_type, underlying_type, false, true);
 }
 
 Type sem_function_type(Type* return_types, u64 return_types_count, Type* parameter_types, u64 parameter_types_count, Allocator_Id allocator_id) {
@@ -308,61 +382,47 @@ Type sem_function_type(Type* return_types, u64 return_types_count, Type* paramet
     return type;
 }
 
-bool sem_type_allocator_equal(Type* type_a, Type* type_b) {
+bool sem_type_equal(Type* type_a, Type* type_b, bool check_allocator, bool check_origin) {
     if (type_a->kind != type_b->kind) return false;
+    if (check_origin) {
+        if (type_a->origin.kind != type_b->origin.kind) return false;
+        switch (type_a->origin.kind) {
+            case type_variable_origin: {
+                Variable* variable_a = type_a->origin.variable;
+                Variable* variable_b = type_b->origin.variable;
+                return variable_a == variable_b;
+            }
+            case type_intrisic_origin: {
+                break;
+            }
+            case type_call_origin: {
+                massert(false, str("not implemented"));
+                break;
+            }
+        }
+    }
+    if (check_allocator) {
+        u64 allocator_id_a = type_a->allocator_id;
+        u64 allocator_id_b = type_b->allocator_id;
+        Allocator* allocator_a = sem_get_allocator(allocator_id_a);
+        Allocator* allocator_b = sem_get_allocator(allocator_id_b);
+        if (allocator_a != allocator_b) return false;
+    }
     switch (type_a->kind) {
-        case type_multiple_value: {
-            Type_Multiple_Value* multi_value_a = &type_a->multiple_value;
-            Type_Multiple_Value* multi_value_b = &type_b->multiple_value;
-            if (multi_value_a->types_count != multi_value_b->types_count) return false;
-            for (u64 i = 0; i < multi_value_a->types_count; i++) {
-                Type* type_a = &multi_value_a->types[i];
-                Type* type_b = &multi_value_b->types[i];
-                if (!sem_type_allocator_equal(type_a, type_b)) return false;
+        case type_struct: {
+            Type_Struct* struct_a = &type_a->struct_;
+            Type_Struct* struct_b = &type_b->struct_;
+            if (struct_a->field_count != struct_b->field_count) return false;
+            for (u64 i = 0; i < struct_a->field_count; i++) {
+                String field_name_a = struct_a->field_names[i];
+                String field_name_b = struct_b->field_names[i];
+                if (!string_equal(field_name_a, field_name_b)) return false;
+                Type* field_type_a = struct_a->field_types[i];
+                Type* field_type_b = struct_b->field_types[i];
+                if (!sem_type_equal(field_type_a, field_type_b, check_allocator, check_origin)) return false;
             }
             return true;
         }
-        case type_function: {
-            // TODO: maybe do somthing here
-            return false;
-        }
-        case type_pointer: {
-            u64 allocator_id_a = type_a->allocator_id;
-            u64 allocator_id_b = type_b->allocator_id;
-            if (allocator_id_a != allocator_id_b) return false;
-            Type* underlying_type_a = type_a->pointer.underlying_type;
-            Type* underlying_type_b = type_b->pointer.underlying_type;
-            return sem_type_allocator_equal(underlying_type_a, underlying_type_b);
-        }
-        case type_reference: {
-            u64 allocator_id_a = type_a->allocator_id;
-            u64 allocator_id_b = type_b->allocator_id;
-            if (allocator_id_a != allocator_id_b) return false;
-            Type* underlying_type_a = type_a->reference.underlying_type;
-            Type* underlying_type_b = type_b->reference.underlying_type;
-            return sem_type_allocator_equal(underlying_type_a, underlying_type_b);
-        }
-        case type_invalid:
-        case type_int_literal:
-        case type_float_literal:
-        case type_int:
-        case type_uint:
-        case type_void:
-        case type_type:
-        case type_float: {
-            return true;
-        }
-    }
-}
-
-bool sem_type_equal(Type* type_a, Type* type_b) {
-    if (!sem_type_equal_without_allocator(type_a, type_b)) return false;
-    return sem_type_allocator_equal(type_a, type_b);
-}
-
-bool sem_type_equal_without_allocator(Type* type_a, Type* type_b) {
-    if (type_a->kind != type_b->kind) return false;
-    switch (type_a->kind) {
         case type_multiple_value: {
             Type_Multiple_Value* multi_value_a = &type_a->multiple_value;
             Type_Multiple_Value* multi_value_b = &type_b->multiple_value;
@@ -370,7 +430,7 @@ bool sem_type_equal_without_allocator(Type* type_a, Type* type_b) {
             for (u64 i = 0; i < multi_value_a->types_count; i++) {
                 Type* type_a = &multi_value_a->types[i];
                 Type* type_b = &multi_value_b->types[i];
-                if (!sem_type_equal_without_allocator(type_a, type_b)) return false;
+                if (!sem_type_equal(type_a, type_b, check_allocator, check_origin)) return false;
             }
             return true;
         }
@@ -382,12 +442,12 @@ bool sem_type_equal_without_allocator(Type* type_a, Type* type_b) {
             for (u64 i = 0; i < function_a->return_types_count; i++) {
                 Type* return_type_a = &function_a->return_types[i];
                 Type* return_type_b = &function_b->return_types[i];
-                if (!sem_type_equal_without_allocator(return_type_a, return_type_b)) return false;
+                if (!sem_type_equal(return_type_a, return_type_b, check_allocator, check_origin)) return false;
             }
             for (u64 i = 0; i < function_a->parameter_types_count; i++) {
                 Type* parameter_type_a = &function_a->parameter_types[i];
                 Type* parameter_type_b = &function_b->parameter_types[i];
-                if (!sem_type_equal_without_allocator(parameter_type_a, parameter_type_b)) return false;
+                if (!sem_type_equal(parameter_type_a, parameter_type_b, check_allocator, check_origin)) return false;
             }
             return true;
         }
@@ -406,12 +466,12 @@ bool sem_type_equal_without_allocator(Type* type_a, Type* type_b) {
         case type_reference: {
             Type* underlying_type_a = type_a->reference.underlying_type;
             Type* underlying_type_b = type_b->reference.underlying_type;
-            return sem_type_equal_without_allocator(underlying_type_a, underlying_type_b);
+            return sem_type_equal(underlying_type_a, underlying_type_b, check_allocator, check_origin);
         }
         case type_pointer: {
             Type* underlying_type_a = type_a->pointer.underlying_type;
             Type* underlying_type_b = type_b->pointer.underlying_type;
-            return sem_type_equal_without_allocator(underlying_type_a, underlying_type_b);
+            return sem_type_equal(underlying_type_a, underlying_type_b, check_allocator, check_origin);
         }
         case type_int_literal:
         case type_float_literal:
@@ -426,6 +486,12 @@ void _sem_get_dependent_variable_in_expression(Expression* expression, Expressio
                                                Function_Implementation*** out_implementations, u64* out_implementations_count,
                                                u64* out_implementations_capacity) {
     switch (expression->kind) {
+        case expression_struct_field_access: {
+            Expression* struct_value = expression->struct_field_access.struct_value;
+            _sem_get_dependent_variable_in_expression(struct_value, out_dependent_expressions, out_count, out_capacity, out_implementations,
+                                                      out_implementations_count, out_implementations_capacity);
+            return;
+        }
         case expression_passthrough: {
             Expression* expr = expression->passthrough.expr;
             _sem_get_dependent_variable_in_expression(expr, out_dependent_expressions, out_count, out_capacity, out_implementations, out_implementations_count,
@@ -467,7 +533,14 @@ void _sem_get_dependent_variable_in_expression(Expression* expression, Expressio
             }
             return;
         }
-        case expression_incomplete:
+        case expression_struct: {
+            for (u64 i = 0; i < expression->struct_.field_count; i++) {
+                Expression* field_type = &expression->struct_.field_types[i];
+                _sem_get_dependent_variable_in_expression(field_type, out_dependent_expressions, out_count, out_capacity, out_implementations,
+                                                          out_implementations_count, out_implementations_capacity);
+            }
+            return;
+        }
         case expression_invalid:
         case expression_int:
         case expression_float:
@@ -509,7 +582,7 @@ void* _sem_evaluate_expression_trivially(Expression* expression) {
             Expression* underlying_expr = expression->cast.expr;
             Type* underlying_type = &underlying_expr->type;
             Type* current_type = &expression->type;
-            if (sem_type_equal_without_allocator(underlying_type, current_type)) {
+            if (sem_type_equal(underlying_type, current_type, false, false)) {
                 return sem_evaluate_expression(underlying_expr);
             }
             return NULL;
@@ -522,6 +595,12 @@ void* _sem_evaluate_expression_trivially(Expression* expression) {
 bool sem_comile_time_value_is_equal(Type* type, void* value_a, void* value_b) {
     if (value_a == NULL || value_b == NULL) return false;
     switch (type->kind) {
+        case type_struct: {
+            Type_Struct* struct_ = &type->struct_;
+            // TODO:
+            massert(false, str("not implemented"));
+            return false;
+        }
         case type_int_literal: {
             i64 a = *(i64*)value_a;
             i64 b = *(i64*)value_b;
@@ -564,7 +643,7 @@ bool sem_comile_time_value_is_equal(Type* type, void* value_a, void* value_b) {
             Type** b = (Type**)value_b;
             Type* a_type = *a;
             Type* b_type = *b;
-            return sem_type_equal_without_allocator(a_type, b_type);
+            return sem_type_equal(a_type, b_type, false, true);
         }
         case type_reference: {
             Type* underlying_type = type->reference.underlying_type;
@@ -622,12 +701,33 @@ void* _sem_evaluate_expression(Expression* expression) {
             log_error_ast(variable_expr->ast, "can't evaluate compile time");
             return NULL;
         }
-        variable->compile_time_value = value;
-        variable->know_compile_time_value = true;
+        sem_set_variable_compile_time_value(variable, value);
     }
     void* value = _sem_evaluate_expression_trivially(expression);
     if (value != NULL) return value;
     return llvm_evaluate_expression(expression);
+}
+
+void sem_set_variable_compile_time_value(Variable* var, void* value) {
+    massert(!var->know_compile_time_value, str("variable already has a compile time value"));
+    if (var->type.kind == type_type) {
+        Type** type_ptr = value;
+        Type* type = *type_ptr;
+        massert(type != NULL, str("type was found to be null"));
+        Type type_new = *type;
+
+        Type_Origin* previous = &type_new.origin;
+        Type_Origin new_origin = {0};
+        new_origin.kind = type_variable_origin;
+        new_origin.previous = previous;
+        type_new.origin = new_origin;
+
+        Type* new_type_ptr = cap_alloc(sizeof(Type));
+        *new_type_ptr = type_new;
+        *(Type**)value = new_type_ptr;
+    }
+    var->compile_time_value = value;
+    var->know_compile_time_value = true;
 }
 
 void* sem_evaluate_expression(Expression* expression) {
@@ -636,12 +736,21 @@ void* sem_evaluate_expression(Expression* expression) {
     if (expression->type.kind == type_type) {
         Type** type_ptr = value;
         Type* type = *type_ptr;
+        massert(type != NULL, str("type was found to be null"));
         Type type_new = sem_type_new_allocator_ids(type);
         Type* new_type = cap_alloc(sizeof(Type));
         *new_type = type_new;
         Type** new_type_ptr = cap_alloc(sizeof(Type*));
         *new_type_ptr = new_type;
         return new_type_ptr;
+    } else if (expression->type.kind == type_function) {
+        Function** function_ptr = value;
+        Function* function = *function_ptr;
+        if (function == NULL) {
+            log_error_ast(expression->ast, "function was found to be null");
+            return NULL;
+        }
+        return function_ptr;
     }
     return value;
 }
@@ -664,18 +773,37 @@ Function sem_function_parse(Ast* ast) {
     massert(ast->kind == ast_function_declaration, str("expected function declaration"));
     Ast_Function_Declaration* function_declaration = &ast->function_declaration;
 
+    u64 return_types_capacity = 8;
+    u64 return_types_count = 0;
+    Type* return_types = cap_alloc(return_types_capacity * sizeof(Type));
+
+    for (u64 i = 0; i < function_declaration->return_types_count; i++) {
+        Ast* return_type = &function_declaration->return_types[i];
+        Type return_type_complete = sem_type_parse(return_type);
+        if (return_type_complete.kind == type_invalid) return (Function){0};
+        ptr_append(return_types, return_types_count, return_types_capacity, return_type_complete);
+    }
+
     u64 parameters_capacity = 8;
-    String* parameter_names = cap_alloc(parameters_capacity * sizeof(String));
     u64 parameters_count = 0;
+    String* parameter_names = cap_alloc(parameters_capacity * sizeof(String));
+
+    u64 parameter_types_count = 0;
+    u64 parameter_types_capacity = 8;
+    Type* parameter_types = cap_alloc(parameter_types_capacity * sizeof(Type));
 
     for (u64 i = 0; i < function_declaration->parameters_count; i++) {
         Ast* parameter = &function_declaration->parameters[i];
         massert(parameter->kind == ast_function_declaration_parameter, str("expected function declaration parameter"));
+        Ast* parameter_type_ast = parameter->function_declaration_parameters.type;
+        Type parameter_type = sem_type_parse(parameter_type_ast);
+        if (parameter_type.kind == type_invalid) return (Function){0};
         String name = parameter->function_declaration_parameters.name;
         ptr_append(parameter_names, parameters_count, parameters_capacity, name);
+        ptr_append(parameter_types, parameter_types_count, parameter_types_capacity, parameter_type);
     }
 
-    Type function_type = sem_function_type(NULL, 0, NULL, 0, NO_ALLOCATOR_ID);
+    Type function_type = sem_function_type(return_types, return_types_count, parameter_types, parameter_types_count, NO_ALLOCATOR_ID);
     return sem_create_function(function_type, parameter_names, ast);
 }
 
@@ -717,6 +845,10 @@ void sem_connect_allocator_ids(Allocator_Id id1, Allocator_Id id2) {
 
 void sem_set_id_allocator(Allocator_Id id, Allocator* allocator) {
     *(cap_context.allocator_map.allocator[id]) = *allocator;
+}
+
+Allocator* sem_get_allocator(Allocator_Id id) {
+    return cap_context.allocator_map.allocator[id];
 }
 
 bool _sem_variable_fits_namespace(Variable* variable, String* namespaces, u64 namespaces_count, u64 namespace_we_are_in) {
@@ -778,9 +910,6 @@ Variable* __sem_find_variable(String name, String* namespaces, u64 namespaces_co
 
 Variable* sem_find_variable(String name, String* namespaces, u64 namespaces_count, Ast* ast_for_error) {
     Variable* variable = __sem_find_variable(name, namespaces, namespaces_count, ast_for_error, cap_context.scope);
-    if (variable == NULL) return NULL;
-    sem_complete_variable_type(variable);
-    if (!variable->is_type_complete) return NULL;
     return variable;
 }
 
@@ -790,7 +919,6 @@ Variable* sem_add_variable(String name, Type type, Ast* ast) {
     variable.name = name;
     variable.type = type;
     variable.ast = ast;
-    variable.is_type_complete = true;
     variable.lost_constant_at_ast = NULL;
 
     Scope* scope = cap_context.scope;
@@ -844,18 +972,12 @@ Function* sem_find_function(String name, String* namespaces, u64 namespaces_coun
         Variable* function = functions[i];
         Type* function_type = &function->type;
 
-        // TODO: maybe handel this better later
-        cap_context.log = false;
-        sem_complete_variable_type(function);
-        cap_context.log = true;
-        if (!function->is_type_complete) continue;
-
         bool is_match = true;
         if (function_type->function.parameter_types_count != parameter_count) continue;
         for (u64 j = 0; j < parameter_count; j++) {
             Type* function_parameter_type = &function_type->function.parameter_types[j];
             Type* parameter_type = &parameters[j];
-            if (!sem_type_equal_without_allocator(function_parameter_type, parameter_type)) {
+            if (!sem_type_equal(function_parameter_type, parameter_type, false, true)) {
                 is_match = false;
                 break;
             }
@@ -903,11 +1025,9 @@ Expression sem_function_call(Function* function, Expression* parameters, u64 par
     for (u64 i = 0; i < parameter_count; i++) {
         Expression* expr = &parameters[i];
         Type* parameter_type = &function->function_type.function.parameter_types[i];
-        if (!sem_type_equal_without_allocator(parameter_type, &expr->type)) {
-            Expression as_function_type = sem_implicit_cast_without_allocator(expr, parameter_type);
-            if (as_function_type.kind == expression_invalid) return (Expression){0};
-            *expr = as_function_type;
-        }
+        Expression as_function_type = sem_implicit_cast_without_allocator(expr, parameter_type);
+        if (as_function_type.kind == expression_invalid) return (Expression){0};
+        *expr = as_function_type;
     }
 
     Function_Implementation* implementation = cap_alloc(sizeof(Function_Implementation));
@@ -1007,7 +1127,7 @@ void sem_complete_expression(Expression* expression) {
                             Variable* parameter = implementation->parameters[j];
                             Type* parameter_type = &parameter->type;
                             Type* call_parameter_type = &call_parameter->type;
-                            if (!sem_type_equal_without_allocator(parameter_type, call_parameter_type)) {
+                            if (!sem_type_equal(parameter_type, call_parameter_type, false, true)) {
                                 is_match = false;
                                 break;
                             }
@@ -1157,6 +1277,7 @@ bool sem_assign_expression(Expression* assignee, Expression* value, Ast* ast) {
     if (assignee->kind == expression_variable_declaration) {
         Type* assignee_type = &assignee->variable_declaration.type;
         Variable* variable = sem_add_variable(assignee->variable_declaration.name, *assignee_type, assignee->ast);
+        if (variable == NULL) return false;
         assignee->variable_declaration.variable = variable;
         if (value) {
             *value = sem_implicit_cast(value, assignee_type);
@@ -1274,12 +1395,35 @@ Statement sem_statement_return(Ast* ast) {
     return statement;
 }
 
+Statement sem_statement_function_declaration(Ast* ast) {
+    massert(ast->kind == ast_function_declaration, str("expected ast_function_declaration"));
+    Statement statement = {0};
+    statement.kind = statement_function_declaration;
+    statement.ast = ast;
+    Function function = sem_function_parse(ast);
+    if (function.function_type.kind == type_invalid) return (Statement){0};
+
+    Variable* var = sem_add_variable(ast->function_declaration.name, function.function_type, ast);
+    if (var == NULL) return (Statement){0};
+    var->initial_value = NULL;
+    Function* function_ptr = cap_alloc(sizeof(Function));
+    *function_ptr = function;
+    Function** function_ptr_ptr = cap_alloc(sizeof(Function*));
+    *function_ptr_ptr = function_ptr;
+    sem_set_variable_compile_time_value(var, function_ptr_ptr);
+
+    statement.function_declaration.variable = var;
+    return statement;
+}
+
 Statement sem_statement_parse(Ast* ast) {
     switch (ast->kind) {
         case ast_return:
             return sem_statement_return(ast);
         case ast_assignment:
             return sem_statement_assignment(ast);
+        case ast_function_declaration:
+            return sem_statement_function_declaration(ast);
         case ast_struct:
         case ast_int:
         case ast_float:
@@ -1306,9 +1450,9 @@ Statement sem_statement_parse(Ast* ast) {
         case ast_shift_right:
         case ast_nil_biop:
             return sem_statement_expression(ast);
+        case ast_field_access:
         case ast_struct_field:
         case ast_function_call:
-        case ast_function_declaration:
         case ast_function_declaration_parameter:
         case ast_top_level:
         case ast_include:
@@ -1347,85 +1491,6 @@ Variable** sem_find_functions_with_name_and_namespace(String name, String* names
     __sem_find_functions_with_name_and_namespace(name, namespaces, namespaces_count, &variables, &variables_capacity, &variables_count, scope);
     *out_count = variables_count;
     return variables;
-}
-
-void sem_complete_variable_type(Variable* variable) {
-    if (variable->is_type_complete) return;
-    u64 namespace_we_are_in = variable->namespace;
-    Type* type = &variable->type;
-    Type_Kind kind = type->kind;
-    switch (kind) {
-        case type_multiple_value: {
-            mabort(str("type should always be complete"));
-            break;
-        }
-        case type_function: {
-            Type_Function* function = &type->function;
-            massert(variable->know_compile_time_value, str("expected compile time value"));
-            Function* f = *(Function**)variable->compile_time_value;
-            Ast* ast = f->ast;
-            massert(ast->kind == ast_function_declaration, str("expected function declaration"));
-
-            // handel visited
-            for (u64 i = 0; i < cap_context.visited_in_typing_count; i++) {
-                Variable* vis = cap_context.visited_in_typing[i];
-                if (vis == variable) return;
-            }
-            cap_context.visited_in_typing[cap_context.visited_in_typing_count] = variable;
-            cap_context.visited_in_typing_count += 1;
-
-            u64 return_types_count = ast->function_declaration.return_types_count;
-            Type* return_types = cap_alloc(return_types_count * sizeof(Type));
-            for (u64 i = 0; i < return_types_count; i++) {
-                Ast* return_type = &ast->function_declaration.return_types[i];
-                Type return_type_complete = sem_type_parse(return_type);
-                return_types[i] = return_type_complete;
-            }
-
-            u64 parameter_types_count = ast->function_declaration.parameters_count;
-            Type* parameter_types = cap_alloc(parameter_types_count * sizeof(Type));
-            for (u64 i = 0; i < parameter_types_count; i++) {
-                Ast* parameter = &ast->function_declaration.parameters[i];
-                Ast* parameter_type_ast = parameter->function_declaration_parameters.type;
-                Type parameter_type_complete = sem_type_parse(parameter_type_ast);
-                parameter_types[i] = parameter_type_complete;
-            }
-
-            Type function_type = sem_function_type(return_types, return_types_count, parameter_types, parameter_types_count, NO_ALLOCATOR_ID);
-            f->function_type = function_type;
-            variable->type = function_type;
-
-            cap_context.visited_in_typing_count -= 1;
-            Variable* vis = cap_context.visited_in_typing[cap_context.visited_in_typing_count];
-            massert(vis == variable, str("variable should be in visited in typing"));
-            break;
-        }
-        case type_type: {
-            massert(false, str("type type should never be complete"));
-            break;
-        }
-        case type_int_literal:
-        case type_float_literal:
-        case type_void:
-        case type_float:
-        case type_uint:
-        case type_int:
-        case type_invalid:
-        case type_reference:
-        case type_pointer: {
-            mabort(str("type should always be complete"));
-            break;
-        }
-    }
-    variable->is_type_complete = true;
-}
-
-void sem_complete_types_in_global_scope() {
-    Scope* global_scope = &cap_context.global_scope;
-    for (u64 i = 0; i < global_scope->variables_count; i++) {
-        Variable* variable = global_scope->variables[i];
-        sem_complete_variable_type(variable);
-    }
 }
 
 Expression sem_expression_nil_biop_parse(Ast* ast) {
@@ -1589,12 +1654,102 @@ Expression sem_expression_function_call_parse(Ast* ast) {
 }
 
 Expression sem_expression_struct_parse(Ast* ast) {
+    massert(ast->kind == ast_struct, str("expected ast_struct"));
+    Expression expr = {0};
+    expr.kind = expression_struct;
+    expr.ast = ast;
+    expr.type = sem_type_type();
+
+    Expression* type = cap_alloc(sizeof(Type) * ast->struct_.fields_count);
+    String* field_names = cap_alloc(sizeof(String) * ast->struct_.fields_count);
+    for (u64 i = 0; i < ast->struct_.fields_count; i++) {
+        Ast* field_ast = &ast->struct_.fields[i];
+        massert(field_ast->kind == ast_struct_field, str("expected ast_struct_field"));
+        Ast* field_type_ast = field_ast->struct_field.type;
+        String field_name = field_ast->struct_field.name;
+        Expression field_type = sem_expression_parse(field_type_ast);
+        field_type = sem_get_value_if(&field_type);
+        if (field_type.kind == expression_invalid) return (Expression){0};
+        if (field_type.type.kind != type_type) {
+            log_error_ast(field_type_ast, "expected type");
+            return (Expression){0};
+        }
+        type[i] = field_type;
+        field_names[i] = field_name;
+    }
+    expr.struct_.field_types = type;
+    expr.struct_.field_names = field_names;
+    expr.struct_.field_count = ast->struct_.fields_count;
+    return expr;
+}
+
+Expression sem_expression_struct_field_access_parse(Expression* lhs, String field_name, Ast* ast) {
+    Type* lhs_type = &lhs->type;
+    massert(lhs_type->kind == type_struct || lhs_type->kind == type_reference, str("expected struct or reference"));
+    Type struct_type;
+    if (lhs_type->kind == type_reference) {
+        struct_type = sem_type_dereference(lhs_type);
+    } else {
+        struct_type = *lhs_type;
+    }
+
+    Expression expr = {0};
+    expr.kind = expression_struct_field_access;
+    expr.ast = ast;
+    expr.struct_field_access.struct_value = cap_alloc(sizeof(Expression));
+    *expr.struct_field_access.struct_value = *lhs;
+
+    u64 field_index = UINT64_MAX;
+    Type* field_type = NULL;
+    for (u64 i = 0; i < struct_type.struct_.field_count; i++) {
+        String field_name = struct_type.struct_.field_names[i];
+        Type* field_type_ = struct_type.struct_.field_types[i];
+        if (string_equal(field_name, field_name)) {
+            field_type = field_type_;
+            field_index = i;
+            break;
+        }
+    }
+    if (field_index == UINT64_MAX) {
+        log_error_ast(ast, "could not find field %.*s", str_info(field_name));
+        return (Expression){0};
+    }
+
+    // TODO: figure out allocator
+    Type new_type = sem_type_new_allocator_ids(field_type);
+    if (lhs_type->kind == type_reference) {
+        new_type = sem_type_reference(&new_type, ast);
+    }
+
+    expr.type = new_type;
+    expr.struct_field_access.field_index = field_index;
+    return expr;
+}
+
+Expression sem_expression_field_access_parse(Ast* ast) {
+    massert(ast->kind == ast_field_access, str("Expected ast_field_access"));
+    Expression value = sem_expression_parse(ast->field_access.value);
+    String field_name = ast->field_access.field_name;
+
+    Type underlying_type;
+    if (value.type.kind == type_reference) {
+        underlying_type = sem_type_dereference(&value.type);
+    } else {
+        underlying_type = sem_type_invalid();
+    }
+
+    if (value.type.kind == type_struct || underlying_type.kind == type_struct) {
+        return sem_expression_struct_field_access_parse(&value, field_name, ast);
+    }
     massert(false, str("not implemented"));
     return (Expression){0};
 }
 
 Expression sem_expression_parse_with_variable_declaration(Ast* ast) {
     switch (ast->kind) {
+        case ast_field_access: {
+            return sem_expression_field_access_parse(ast);
+        }
         case ast_int: {
             return sem_expression_int_parse(ast);
         }
@@ -1738,7 +1893,7 @@ bool sem_can_implicit_cast(Expression* expr, Type* type) {
     if (type->kind != type_reference && expr->type.kind == type_reference) {
         expr_type = sem_type_dereference(&expr_type);
     }
-    if (sem_type_equal_without_allocator(&expr_type, type)) return true;
+    if (sem_type_equal(&expr_type, type, false, false)) return true;
     if (expr_type.kind == type_int && type->kind == type_int) {
         u64 expr_bits = expr_type.int_.bits;
         u64 type_bits = type->int_.bits;
@@ -1808,7 +1963,7 @@ Expression sem_passthrough(Expression* expr) {
 }
 
 Expression _sem_implicit_cast(Expression* expr, Type* type, bool connect_allocator) {
-    if (sem_type_equal(type, &expr->type)) return *expr;
+    if (sem_type_equal(type, &expr->type, true, true)) return *expr;
     if (sem_can_implicit_cast(expr, type)) {
         Expression cast = _sem_cast(expr, type, connect_allocator);
         if (cast.kind == expression_invalid) return (Expression){0};

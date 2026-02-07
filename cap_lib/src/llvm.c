@@ -50,6 +50,17 @@ LLVMTypeRef llvm_get_type(Type* type) {
                 }
             }
         }
+        case type_struct: {
+            Type_Struct* struct_ = &type->struct_;
+            LLVMTypeRef* llvm_types = cap_alloc(struct_->field_count * sizeof(LLVMTypeRef));
+            for (u64 i = 0; i < struct_->field_count; i++) {
+                Type* type = struct_->field_types[i];
+                LLVMTypeRef type_llvm = llvm_get_type(type);
+                llvm_types[i] = type_llvm;
+            }
+            LLVMTypeRef struct_type = LLVMStructType(llvm_types, struct_->field_count, 0);
+            return struct_type;
+        }
         case type_multiple_value: {
             Type_Multiple_Value* multi_value = &type->multiple_value;
             LLVMTypeRef* llvm_types = cap_alloc(multi_value->types_count * sizeof(LLVMTypeRef));
@@ -78,17 +89,63 @@ LLVMTypeRef llvm_get_type(Type* type) {
     }
 }
 
-void llvm_add_variable(Variable* variable) {
+void _llvm_add_variable(Variable* variable, bool is_global) {
     LLVMTypeRef variable_type = llvm_get_type(&variable->type);
     String variable_name = variable->name;
     char variable_namec[4096];
     snprintf(variable_namec, 4096, "%.*s", str_info(variable_name));
-    LLVMValueRef variable_value = LLVMBuildAlloca(cap_context.llvm_info.builder, variable_type, variable_namec);
+    LLVMValueRef variable_value;
+    if (is_global) {
+        variable_value = LLVMAddGlobal(cap_context.llvm_info.module_info.module, variable_type, variable_namec);
+        LLVMSetInitializer(variable_value, LLVMConstNull(variable_type));
+        LLVMSetLinkage(variable_value, LLVMInternalLinkage);
+    } else {
+        variable_value = LLVMBuildAlloca(cap_context.llvm_info.builder, variable_type, variable_namec);
+    }
+    LLVMBuildStore(cap_context.llvm_info.builder, LLVMConstNull(variable_type), variable_value);
     llvm_set_variable_value(variable, variable_value);
+}
+
+void llvm_add_global_variable(Variable* variable) {
+    return _llvm_add_variable(variable, true);
+}
+
+void llvm_add_variable(Variable* variable) {
+    return _llvm_add_variable(variable, false);
 }
 
 LLVM_Scope_Info llvm_compile_scope(Scope* scope) {
     return llvm_compile_scope_with_function_variables(scope, NULL, 0);
+}
+
+LLVMBasicBlockRef llvm_add_global_statements() {
+    Scope* last_scope = cap_context.scope;
+    cap_context.scope = &cap_context.global_scope;
+
+    Cap_Folder* folder = cap_context.folders[cap_context.namespace_we_are_in];
+    Function_Implementation* function_implementation = cap_context.function_being_built;
+    LLVM_Function_Info* function_info = llvm_get_function_info(function_implementation);
+    LLVMBasicBlockRef global_entry = LLVMAppendBasicBlock(function_info->function, "scope_entry");
+    LLVMBasicBlockRef last_block = llvm_set_active_block(global_entry);
+    LLVM_Scope_Info* scope_info = llvm_add_scope_info(&cap_context.global_scope);
+    scope_info->entry_block = global_entry;
+
+    Scope* scope = &cap_context.global_scope;
+    for (u64 i = 0; i < scope->variables_count; i++) {
+        Variable* variable = scope->variables[i];
+        llvm_add_global_variable(variable);
+    }
+
+    for (u64 i = 0; i < folder->global_statements_count; i++) {
+        Statement* global_statement = &folder->global_statements[i];
+        bool breaks_scope = llvm_compile_statement(global_statement);
+        massert(!breaks_scope, str("expected global statement to not break scope"));
+    }
+
+    cap_context.scope = last_scope;
+    llvm_set_active_block(last_block);
+
+    return global_entry;
 }
 
 LLVM_Scope_Info llvm_compile_scope_with_function_variables(Scope* scope, Variable** scope_variables_already_initalized,
@@ -169,12 +226,10 @@ LLVMValueRef llvm_compile_dereference(Expression* expression) {
         *pointer_type_ptr = pointer_type;
         Type** pointer_type_ptr_ptr = &pointer_type_ptr->pointer.underlying_type;
 
-        LLVMValueRef type_to_override_int = LLVMConstInt(LLVMIntType(64), (uintptr_t)pointer_type_ptr_ptr, 0);
-        LLVMValueRef type_to_override = LLVMConstIntToPtr(type_to_override_int, LLVMPointerType(LLVMPointerType(LLVMIntType(8), 0), 0));
+        LLVMValueRef type_to_override = llvm_get_pointer_as_llvm_value(pointer_type_ptr_ptr);
         LLVMBuildStore(cap_context.llvm_info.builder, value, type_to_override);
 
-        LLVMValueRef new_pointer_ptr_int = LLVMConstInt(LLVMIntType(64), (uintptr_t)pointer_type_ptr, 0);
-        LLVMValueRef new_pointer_ptr = LLVMConstIntToPtr(new_pointer_ptr_int, LLVMPointerType(LLVMPointerType(LLVMIntType(8), 0), 0));
+        LLVMValueRef new_pointer_ptr = llvm_get_pointer_as_llvm_value(pointer_type_ptr);
         return new_pointer_ptr;
     } else {
         mabort(str("trying to derefernce non dereferenceable type"));
@@ -187,7 +242,7 @@ LLVMValueRef llvm_compile_cast_with_valueref(Expression* expression, LLVMValueRe
     LLVMValueRef underlying_value = value_of_cast;
     Type* underlying_type = &underlying_expr->type;
     Type* new_type = &expression->type;
-    if (sem_type_equal_without_allocator(underlying_type, new_type)) return underlying_value;
+    if (sem_type_equal(underlying_type, new_type, false, false)) return underlying_value;
 
     switch (new_type->kind) {
         case type_float_literal: {
@@ -395,6 +450,7 @@ LLVMValueRef llvm_compile_cast_with_valueref(Expression* expression, LLVMValueRe
                 }
             }
         }
+        case type_struct:
         case type_reference:
         case type_pointer:
         case type_type:
@@ -473,6 +529,71 @@ LLVMValueRef llvm_compile_function_call(Expression* expression) {
     LLVMValueRef function_value = LLVMBuildCall2(cap_context.llvm_info.builder, function_info->function_type, function_info->function, parameters,
                                                  expression->function_call.parameter_count, "call");
 
+    // for function call origin tracking
+    if (cap_context.is_in_semantic_analysis) {
+        u64 offset_of_origin = offsetof(Type, origin);
+        LLVMValueRef offset_of_origin_llvm = LLVMConstInt(LLVMInt64Type(), offset_of_origin, 0);
+
+        u64 value_origin_count = 0;
+        u64 value_origin_capacity = 0;
+        LLVMValueRef* value_origin_ptrs = NULL;
+        if (expression->type.kind == type_type) {
+            LLVMValueRef value_origin_ptr =
+                LLVMBuildGEP2(cap_context.llvm_info.builder, LLVMIntType(8), function_value, &offset_of_origin_llvm, 1, "value_origin_ptr");
+            ptr_append(value_origin_ptrs, value_origin_count, value_origin_capacity, value_origin_ptr);
+        } else if (expression->type.kind == type_multiple_value) {
+            Type_Multiple_Value* multiple_value = &expression->type.multiple_value;
+            for (u64 i = 0; i < multiple_value->types_count; i++) {
+                Type* type = &multiple_value->types[i];
+                if (type->kind != type_type) continue;
+                LLVMValueRef valuei_llvm = llvm_compile_multiple_values_access_with_valueref_and_index(function_value, i);
+                LLVMValueRef value_origin_ptr =
+                    LLVMBuildGEP2(cap_context.llvm_info.builder, LLVMIntType(8), valuei_llvm, &offset_of_origin_llvm, 1, "value_origin_ptr");
+                ptr_append(value_origin_ptrs, value_origin_count, value_origin_capacity, value_origin_ptr);
+            }
+        }
+        if (value_origin_count != 0) {
+            Type_Call_Origin* call_origin = cap_alloc(sizeof(Type_Call_Origin));
+            call_origin->function = function_implementation->function;
+            call_origin->parameter_types = cap_alloc(expression->function_call.parameter_count * sizeof(Type));
+            call_origin->parameter_compile_time_values = cap_alloc(expression->function_call.parameter_count * sizeof(void*));
+            call_origin->parameter_count = expression->function_call.parameter_count;
+            for (u64 i = 0; i < expression->function_call.parameter_count; i++) {
+                Expression* parameter = &expression->function_call.parameters[i];
+                LLVMValueRef parameter_value = parameters[i];
+                Type* parameter_type = &parameter->type;
+                call_origin->parameter_types[i] = *parameter_type;
+
+                LLVMTypeRef parameter_type_llvm = llvm_get_type(parameter_type);
+                u64 parameter_type_size = LLVMSizeOfTypeInBits(cap_context.llvm_info.data_layout, parameter_type_llvm);
+                void* parameter_memory = cap_alloc(parameter_type_size);
+                call_origin->parameter_compile_time_values[i] = parameter_memory;
+
+                LLVMValueRef parameter_memory_llvm = llvm_get_pointer_as_llvm_value(parameter_memory);
+
+                LLVMBuildStore(cap_context.llvm_info.builder, parameter_value, parameter_memory_llvm);
+            }
+
+            for (u64 i = 0; i < value_origin_count; i++) {
+                Type_Origin* origin = cap_alloc(sizeof(Type_Origin));
+                origin->kind = type_call_origin;
+                origin->previous = cap_alloc(sizeof(Type_Origin));
+                origin->previous->kind = 990;
+                origin->call_origin = call_origin;
+
+                u64 origin_size = sizeof(Type_Origin);
+                LLVMValueRef origin_size_llvm = LLVMConstInt(LLVMInt64Type(), origin_size, 0);
+                LLVMValueRef origin_ptr_llvm = value_origin_ptrs[i];
+
+                LLVMValueRef previous_ptr_llvm = llvm_get_pointer_as_llvm_value(origin->previous);
+                LLVMBuildMemCpy(cap_context.llvm_info.builder, previous_ptr_llvm, 0, origin_ptr_llvm, 0, origin_size_llvm);
+
+                LLVMValueRef origin_ptr = llvm_get_pointer_as_llvm_value(origin);
+                LLVMBuildMemCpy(cap_context.llvm_info.builder, origin_ptr_llvm, 0, origin_ptr, 0, origin_size_llvm);
+            }
+        }
+    }
+
     return function_value;
 }
 
@@ -490,6 +611,10 @@ LLVMValueRef llvm_extract_multiple_values_value(LLVMValueRef value, u64 index, T
     return LLVMBuildExtractValue(cap_context.llvm_info.builder, value, index, "");
 }
 
+LLVMValueRef llvm_compile_multiple_values_access_with_valueref_and_index(LLVMValueRef value_of_multiple_value, u64 index) {
+    return LLVMBuildExtractValue(cap_context.llvm_info.builder, value_of_multiple_value, index, "");
+}
+
 LLVMValueRef llvm_compile_multiple_values_access_with_valueref(Expression* expression, LLVMValueRef value_of_multiple_value) {
     massert(expression->kind == expression_multiple_values_access, str("expected multiple values"));
     Expression* multiple_values_value = expression->multiple_values_access.multiple_values_value;
@@ -503,8 +628,61 @@ LLVMValueRef llvm_compile_multiple_values_access(Expression* expression) {
     return llvm_compile_multiple_values_access_with_valueref(expression, value);
 }
 
+LLVMValueRef llvm_compile_struct(Expression* expression) {
+    if (!cap_context.is_in_semantic_analysis) return LLVMGetUndef(llvm_get_type(&expression->type));
+    Type* new_struct_type = cap_alloc(sizeof(Type));
+    new_struct_type->kind = type_struct;
+    new_struct_type->allocator_id = sem_get_new_allocator_id();
+    new_struct_type->struct_.field_names = cap_alloc(expression->struct_.field_count * sizeof(String));
+    new_struct_type->struct_.field_types = cap_alloc(expression->struct_.field_count * sizeof(Type));
+    new_struct_type->struct_.field_count = expression->struct_.field_count;
+    new_struct_type->origin.previous = NULL;
+    new_struct_type->origin.kind = type_intrisic_origin;
+
+    LLVMValueRef* field_type_values = cap_alloc(expression->struct_.field_count * sizeof(LLVMValueRef));
+    for (u64 i = 0; i < expression->struct_.field_count; i++) {
+        Expression* field_type = &expression->struct_.field_types[i];
+        LLVMValueRef field_type_value = llvm_compile_expression(field_type);
+        field_type_values[i] = field_type_value;
+        new_struct_type->struct_.field_names[i] = expression->struct_.field_names[i];
+        void* value_to_read_type_into = &new_struct_type->struct_.field_types[i];
+
+        LLVMValueRef llvm_ptr = llvm_get_pointer_as_llvm_value(value_to_read_type_into);
+
+        LLVMBuildStore(cap_context.llvm_info.builder, field_type_value, llvm_ptr);
+    }
+
+    LLVMValueRef llvm_ptr = llvm_get_pointer_as_llvm_value(new_struct_type);
+
+    return llvm_ptr;
+}
+
+LLVMValueRef llvm_compile_struct_field_access(Expression* expression) {
+    massert(expression->kind == expression_struct_field_access, str("expected expression_struct_field_access"));
+    Expression* lhs = expression->struct_field_access.struct_value;
+    LLVMValueRef value = llvm_compile_expression(lhs);
+
+    Type* lhs_type = &lhs->type;
+    massert(lhs_type->kind == type_struct || lhs_type->kind == type_reference, str("expected struct or reference"));
+    Type struct_type;
+    if (lhs_type->kind == type_reference) {
+        struct_type = sem_type_dereference(lhs_type);
+    } else {
+        struct_type = *lhs_type;
+    }
+
+    LLVMTypeRef struct_type_llvm = llvm_get_type(&struct_type);
+    if (lhs_type->kind == type_reference) {
+        return LLVMBuildStructGEP2(cap_context.llvm_info.builder, struct_type_llvm, value, expression->struct_field_access.field_index, "struct_field_access");
+    } else {
+        return LLVMBuildExtractValue(cap_context.llvm_info.builder, value, expression->struct_field_access.field_index, "struct_field_access");
+    }
+}
+
 LLVMValueRef llvm_compile_expression(Expression* expression) {
     switch (expression->kind) {
+        case expression_struct_field_access:
+            return llvm_compile_struct_field_access(expression);
         case expression_passthrough:
             return llvm_compile_expression(expression->passthrough.expr);
         case expression_variable:
@@ -525,6 +703,8 @@ LLVMValueRef llvm_compile_expression(Expression* expression) {
             return llvm_compile_int(expression);
         case expression_float:
             return llvm_compile_float(expression);
+        case expression_struct:
+            return llvm_compile_struct(expression);
         case expression_invalid: {
             mabort(str("invalid expression"));
         }
@@ -656,8 +836,11 @@ bool llvm_compile_statement(Statement* statement) {
         case statement_return: {
             return llvm_compile_return_statement(statement);
         }
+        case statement_function_declaration: {
+            return false;
+        }
         case statement_invalid: {
-            log_error("invalid statement");
+            massert(false, str("should never be compiling an invalid statement"));
             return false;
         }
     }
@@ -679,8 +862,13 @@ void llvm_compile_program(Program* program) {
     function_info->function = main_function_value;
     function_info->function_type = main_function_type;
 
+    LLVMBasicBlockRef entry = llvm_add_global_statements();
+
     LLVM_Scope_Info scope_info = llvm_compile_scope(main_function_scope);
-    LLVMBasicBlockRef entry_block = scope_info.entry_block;
+    LLVMBasicBlockRef scope_entry_block = scope_info.entry_block;
+
+    llvm_set_active_block(entry);
+    LLVMBuildBr(cap_context.llvm_info.builder, scope_entry_block);
 
     llvm_print_module();
 
@@ -819,16 +1007,17 @@ LLVMValueRef _llvm_get_variable_value(Variable* variable, Scope* scope) {
     return NULL;
 }
 
+LLVMValueRef llvm_get_pointer_as_llvm_value(void* value) {
+    LLVMValueRef ptr_as_int = LLVMConstInt(LLVMIntType(64), (uintptr_t)value, 0);
+    LLVMValueRef llvm_ptr = LLVMConstIntToPtr(ptr_as_int, LLVMPointerType(LLVMIntType(8), 0));
+    return llvm_ptr;
+}
+
 LLVMValueRef llvm_get_variable_value(Variable* variable) {
     if (cap_context.is_in_semantic_analysis && variable->know_compile_time_value) {
         void* value = variable->compile_time_value;
         Type* type = value;
-        LLVMValueRef ptr_as_int = LLVMConstInt(LLVMIntType(64), (uintptr_t)value, 0);
-        LLVMValueRef llvm_ptr = LLVMConstIntToPtr(ptr_as_int, LLVMPointerType(LLVMIntType(8), 0));
-        return llvm_ptr;
-    } else if (!cap_context.is_in_semantic_analysis && variable->type.kind == type_type) {
-        LLVMTypeRef empty_struct = LLVMStructType(NULL, 0, 0);
-        return LLVMBuildAlloca(cap_context.llvm_info.builder, empty_struct, "empty_struct");
+        return llvm_get_pointer_as_llvm_value(value);
     }
     Scope* scope = cap_context.scope;
     return _llvm_get_variable_value(variable, scope);

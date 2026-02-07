@@ -24,6 +24,7 @@ typedef struct Ast_String Ast_String;
 typedef struct Ast_Include Ast_Include;
 typedef struct Ast_Struct_Field Ast_Struct_Field;
 typedef struct Ast_Struct Ast_Struct;
+typedef struct Ast_Field_Access Ast_Field_Access;
 
 typedef enum Ast_Kind {
     ast_invalid = 0,
@@ -60,6 +61,7 @@ typedef enum Ast_Kind {
     ast_include,
     ast_struct,
     ast_struct_field,
+    ast_field_access,
 } Ast_Kind;
 
 struct Ast_Struct_Field {
@@ -68,8 +70,6 @@ struct Ast_Struct_Field {
 };
 
 struct Ast_Struct {
-    String name;
-    Ast* parameter_list;
     Ast* fields;
     u64 fields_count;
 };
@@ -98,6 +98,11 @@ struct Ast_Function_Call {
     Ast* function_variable;
     Ast* parameters;
     u32 parameters_count;
+};
+
+struct Ast_Field_Access {
+    Ast* value;
+    String field_name;
 };
 
 struct Ast_Float {
@@ -146,13 +151,11 @@ struct Ast_Assignment {
 
 struct Ast_Top_Level {
     Ast* programs;
-    Ast* functions;
     Ast* includes;
-    Ast* assignments;
+    Ast* top_level_statements;
     u32 programs_count;
-    u32 functions_count;
     u32 includes_count;
-    u32 assignments_count;
+    u32 top_level_statements_count;
 };
 
 struct Ast_Program {
@@ -194,6 +197,7 @@ struct Ast {
         Ast_Include include;
         Ast_Struct struct_;
         Ast_Struct_Field struct_field;
+        Ast_Field_Access field_access;
     };
 };
 
@@ -235,6 +239,8 @@ Ast _ast_expression_parse(Tokens tokens, u64* i, Cap_File* file, Token_Kind* del
 Ast ast_expression_value_parse(Tokens tokens, u64* i, Cap_File* file);
 
 Ast ast_expression_value_parse_identifier(Tokens tokens, u64* i, Cap_File* file);
+
+Ast ast_expression_field_access_parse(Tokens tokens, u64* i, Cap_File* file, Ast* lhs);
 
 Ast ast_expression_dereference_parse(Tokens tokens, u64* i, Cap_File* file, Ast* lhs, Token_Kind* delimiter, u64 delimiter_count);
 Ast ast_expression_reference_parse(Tokens tokens, u64* i, Cap_File* file, Ast* lhs, Token_Kind* delimiter, u64 delimiter_count);

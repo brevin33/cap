@@ -60,6 +60,7 @@ typedef enum Token_Kind {
     token_string_block_end,
     token_colon_colon,
     token_colon,
+    token_dot,
 } Token_Kind;
 
 struct Token {

@@ -64,9 +64,12 @@ LLVMTypeRef llvm_get_type(Type* type);
 
 LLVMBasicBlockRef llvm_set_active_block(LLVMBasicBlockRef block);
 
+LLVMBasicBlockRef llvm_add_global_statements();
 LLVM_Scope_Info llvm_compile_scope(Scope* scope);
 LLVM_Scope_Info llvm_compile_scope_with_function_variables(Scope* scope, Variable** scope_variables_already_initalized,
                                                            u64 scope_variables_already_initalized_count);
+
+LLVMValueRef llvm_get_pointer_as_llvm_value(void* value);
 
 void llvm_set_variable_value(Variable* variable, LLVMValueRef value);
 LLVMValueRef llvm_get_variable_value(Variable* variable);
@@ -94,8 +97,10 @@ LLVMValueRef llvm_compile_function_call(Expression* expression);
 LLVMValueRef llvm_compile_dereference(Expression* expression);
 LLVMValueRef llvm_compile_multiple_values_access(Expression* expression);
 LLVMValueRef llvm_compile_multiple_values_access_with_valueref(Expression* expression, LLVMValueRef value_of_multiple_value);
+LLVMValueRef llvm_compile_multiple_values_access_with_valueref_and_index(LLVMValueRef value_of_multiple_value, u64 index);
 
 void llvm_add_variable(Variable* variable);
+void llvm_add_global_variable(Variable* variable);
 
 void* llvm_evaluate_expression(Expression* expression);
 

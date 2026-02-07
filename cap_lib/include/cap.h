@@ -34,10 +34,6 @@ struct Cap_Context {
     Allocator_Map allocator_map;
     Scope global_scope;
 
-    Variable** visited_in_typing;
-    u32 visited_in_typing_count;
-    u32 visited_in_typing_capacity;
-
     Cap_Folder** folders;
     u64 folders_count;
     u64 folders_capacity;
@@ -81,6 +77,9 @@ struct Cap_Folder {
     Cap_Folder** folders;
     String* folder_namespace_aliases;
     u64 folders_count;
+
+    Statement* global_statements;
+    u64 global_statements_count;
 
     u64 namespace_id;
 };

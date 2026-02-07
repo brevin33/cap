@@ -1,6 +1,15 @@
 
-i32 g = 8
+
+type bar(i32 a){
+    return i32
+}
+
+type foo = struct { i32 a; i32 b; }
 
 program main{
-    return g
+    i32 bob = 89
+    foo a 
+    bar(bob)* c = a.a&
+    c* = 94
+    return a.a
 }

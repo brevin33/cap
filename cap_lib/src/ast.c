@@ -1,3 +1,5 @@
+#include "cap/ast.h"
+
 #include "cap.h"
 #include "cap/token.h"
 
@@ -310,40 +312,26 @@ Ast ast_struct_parse(Tokens tokens, u64* i, Cap_File* file) {
     token_next(tokens, &tid);
 
     token = token_get(tokens, &tid);
-    if (token.kind == token_identifier) {
-        ast.struct_.name = token.content;
-        token_next(tokens, &tid);
-    }
-
-    if (token.kind == token_paren_open) {
-        Ast parameter_list = ast_function_declaration_parameter_parse(tokens, &tid, file);
-        if (parameter_list.kind == ast_invalid) return (Ast){0};
-        ast.struct_.parameter_list = cap_alloc(sizeof(Ast));
-        *ast.struct_.parameter_list = parameter_list;
-    }
-
-    token = token_get(tokens, &tid);
     ast_expect(token, token_begin_scope, file);
     token_next(tokens, &tid);
 
     token = token_get(tokens, &tid);
-    if (token.kind != token_end_scope) {
-        u64 fields_capacity = 8;
-        ast.struct_.fields = cap_alloc(fields_capacity * sizeof(ast.struct_.fields[0]));
-        ast.struct_.fields_count = 0;
-        while (true) {
-            Ast field = ast_struct_field_parse(tokens, &tid, file);
-            if (field.kind == ast_invalid) return (Ast){0};
-            ptr_append(ast.struct_.fields, ast.struct_.fields_count, fields_capacity, field);
-            token = token_get(tokens, &tid);
-            if (token.kind == token_end_scope) break;
-            else if (token.kind == token_end_statement) {
-                token_next(tokens, &tid);
-                continue;
-            }
-            log_error_token(file, token, "Expected comma or end_scope");
-            return (Ast){0};
+    u64 fields_capacity = 8;
+    ast.struct_.fields = cap_alloc(fields_capacity * sizeof(ast.struct_.fields[0]));
+    ast.struct_.fields_count = 0;
+    while (true) {
+        token = token_get(tokens, &tid);
+        if (token.kind == token_end_scope) break;
+        Ast field = ast_struct_field_parse(tokens, &tid, file);
+        if (field.kind == ast_invalid) return (Ast){0};
+        ptr_append(ast.struct_.fields, ast.struct_.fields_count, fields_capacity, field);
+        token = token_get(tokens, &tid);
+        if (token.kind == token_end_statement) {
+            token_next(tokens, &tid);
+            continue;
         }
+        log_error_token(file, token, "Expected end statement");
+        return (Ast){0};
     }
     massert(token.kind == token_end_scope, str("Expected end scope"));
     token_next(tokens, &tid);
@@ -405,6 +393,7 @@ Ast ast_expression_value_parse(Tokens tokens, u64* i, Cap_File* file) {
         case token_struct: {
             return ast_struct_parse(tokens, i, file);
         }
+        case token_dot:
         case token_paren_close:
         case token_bitwise_xor:
         case token_shift_left_assign:
@@ -556,6 +545,30 @@ Ast_Kind ast_token_type_to_biop_kind(Token_Kind kind) {
         }
     }
 }
+
+Ast ast_expression_field_access_parse(Tokens tokens, u64* i, Cap_File* file, Ast* lhs) {
+    u64 tid = *i;
+    Ast ast = {0};
+    ast.kind = ast_field_access;
+    ast.tokens.data = lhs->tokens.data;
+    ast.file = file;
+    ast.field_access.value = cap_alloc(sizeof(Ast));
+    *ast.field_access.value = *lhs;
+
+    Token token = token_get(tokens, &tid);
+    ast_expect(token, token_dot, file);
+    token_next(tokens, &tid);
+
+    token = token_get(tokens, &tid);
+    ast_expect(token, token_identifier, file);
+    ast.field_access.field_name = token.content;
+    token_next(tokens, &tid);
+
+    ast.tokens.count = lhs->tokens.count + tid - *i;
+    token_set(tokens, i, tid);
+    return ast;
+}
+
 Ast _ast_expression_parse(Tokens tokens, u64* i, Cap_File* file, Token_Kind* delimiter, u64 delimiter_count, u64 precedence) {
     u64 tid = *i;
     Ast lhs = ast_expression_value_parse(tokens, &tid, file);
@@ -581,6 +594,12 @@ Ast _ast_expression_parse(Tokens tokens, u64* i, Cap_File* file, Token_Kind* del
                 lhs = ast_reference;
                 continue;
             }
+        }
+        if (token.kind == token_dot) {
+            Ast ast_field_access = ast_expression_field_access_parse(tokens, &tid, file, &lhs);
+            if (ast_field_access.kind == ast_invalid) return (Ast){0};
+            lhs = ast_field_access;
+            continue;
         }
         if (token.kind == token_identifier) {
             Ast rhs = ast_expression_parse(tokens, &tid, file, delimiter, delimiter_count);
@@ -837,6 +856,7 @@ Ast ast_assignment_parse(Tokens tokens, u64* i, Cap_File* file) {
 
 Ast ast_function_scope_statement_identifier_parse(Tokens tokens, u64* i, Cap_File* file) {
     u64 tid = *i;
+    if (ast_parse_as_function_declaration(tokens, &tid, file)) return ast_function_declaration_parse(tokens, i, file);
     return ast_assignment_parse(tokens, i, file);
 }
 
@@ -869,6 +889,7 @@ Ast ast_function_scope_statement_parse(Tokens tokens, u64* i, Cap_File* file) {
         case token_end_statement: {
             return (Ast){0};
         }
+        case token_dot:
         case token_paren_close:
         case token_bitwise_xor:
         case token_shift_left_assign:
@@ -1103,6 +1124,7 @@ Ast ast_parse_top_level_statement(Tokens tokens, u64* i, Cap_File* file) {
         case token_end_scope:
             return (Ast){0};  // we don't need to error here as it will be caught as a error for not having a begin scope
         case token_colon_colon:
+        case token_dot:
         case token_colon:
         case token_hashtag:
         case token_as:
@@ -1159,17 +1181,13 @@ Ast ast_parse_top_level_ast(Tokens tokens, u64* i, Cap_File* file) {
     ast.top_level.programs = cap_alloc(program_capacity * sizeof(ast.top_level.programs[0]));
     ast.top_level.programs_count = 0;
 
-    u64 function_capacity = 8;
-    ast.top_level.functions = cap_alloc(function_capacity * sizeof(ast.top_level.functions[0]));
-    ast.top_level.functions_count = 0;
-
     u64 include_capacity = 8;
     ast.top_level.includes = cap_alloc(include_capacity * sizeof(ast.top_level.includes[0]));
     ast.top_level.includes_count = 0;
 
-    u64 assignment_capacity = 8;
-    ast.top_level.assignments = cap_alloc(assignment_capacity * sizeof(ast.top_level.assignments[0]));
-    ast.top_level.assignments_count = 0;
+    u64 top_level_statements_capacity = 8;
+    ast.top_level.top_level_statements = cap_alloc(top_level_statements_capacity * sizeof(ast.top_level.top_level_statements[0]));
+    ast.top_level.top_level_statements_count = 0;
 
     Token token = token_get(tokens, &tid);
     while (token.kind != token_end_file) {
@@ -1178,14 +1196,12 @@ Ast ast_parse_top_level_ast(Tokens tokens, u64* i, Cap_File* file) {
             case ast_program:
                 ptr_append(ast.top_level.programs, ast.top_level.programs_count, program_capacity, top_level_statement);
                 break;
-            case ast_function_declaration:
-                ptr_append(ast.top_level.functions, ast.top_level.functions_count, function_capacity, top_level_statement);
-                break;
             case ast_include:
                 ptr_append(ast.top_level.includes, ast.top_level.includes_count, include_capacity, top_level_statement);
                 break;
+            case ast_function_declaration:
             case ast_assignment:
-                ptr_append(ast.top_level.assignments, ast.top_level.assignments_count, assignment_capacity, top_level_statement);
+                ptr_append(ast.top_level.top_level_statements, ast.top_level.top_level_statements_count, top_level_statements_capacity, top_level_statement);
                 break;
             case ast_invalid:
                 break;
@@ -1217,6 +1233,7 @@ Ast ast_parse_top_level_ast(Tokens tokens, u64* i, Cap_File* file) {
             case ast_shift_left:
             case ast_shift_right:
             case ast_struct:
+            case ast_field_access:
             case ast_struct_field:
                 log_error_token(file, token, "Unexpected top level statement");
                 break;
@@ -1267,6 +1284,8 @@ Ast ast_parse_tokens(Tokens tokens, Cap_File* file) {
 
 String ast_kind_to_string(Ast_Kind kind) {
     switch (kind) {
+        case ast_field_access:
+            return str("field_access");
         case ast_include:
             return str("include");
         case ast_string:

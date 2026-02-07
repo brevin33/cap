@@ -32,6 +32,12 @@ Cap_Folder* cap_create_folder(String path, Cap_Folder** visited_folders, u64 vis
             mabort(str("Exiting because of circular folder dependency"));
         }
     }
+    for (u64 i = 0; i < cap_context.folders_count; i++) {
+        Cap_Folder* folder = cap_context.folders[i];
+        if (filesystem_path_are_equal(folder->path, path)) {
+            return folder;
+        }
+    }
 
     Cap_Folder* folder = cap_alloc(sizeof(Cap_Folder));
     folder->path = path;
@@ -96,27 +102,71 @@ Cap_Folder* cap_create_folder(String path, Cap_Folder** visited_folders, u64 vis
     u64 programs_capacity = 8;
     folder->programs = cap_alloc(programs_capacity * sizeof(Program));
     folder->programs_count = 0;
+
+    u64 global_statements_count = 0;
     for (u64 i = 0; i < folder->files_count; i++) {
         Cap_File* file = &folder->files[i];
         Ast* ast = &file->ast;
-        for (u64 j = 0; j < ast->top_level.functions_count; j++) {
-            Ast* function_ast = &file->ast.top_level.functions[j];
-            massert(function_ast->kind == ast_function_declaration, str("expected function declaration"));
-            Function function = sem_function_parse(function_ast);
-            Function* function_ptr = cap_alloc(sizeof(Function));
-            *function_ptr = function;
-            Variable* var = sem_add_variable(function_ast->function_declaration.name, function.function_type, function_ast);
-            var->is_type_complete = false;
-            var->know_compile_time_value = true;
-            var->compile_time_value = cap_alloc(sizeof(Function*));
-            *(void**)var->compile_time_value = function_ptr;
-        }
-
-        for (u64 j = 0; j < ast->top_level.assignments_count; j++) {
-        }
+        global_statements_count += ast->top_level.top_level_statements_count;
     }
 
-    sem_complete_types_in_global_scope();
+    folder->global_statements = cap_alloc(global_statements_count * sizeof(Statement));
+    folder->global_statements_count = 0;
+
+    bool* global_statement_is_complete = cap_alloc(global_statements_count * sizeof(bool));
+
+    // the way that I sort the statements by dependency is by just trying to see if they can be completed then adding them to the list
+    // of completed statements. if they can't be completed then they are invalid and we just skip them until the next iteration where more statements
+    // have been completed so they might now be able to be completed
+    cap_context.log = false;
+    u64 last_global_statements_count = INT64_MAX;
+    while (last_global_statements_count != folder->global_statements_count) {
+        last_global_statements_count = folder->global_statements_count;
+        u64 statement_index = 0;
+        for (u64 i = 0; i < folder->files_count; i++) {
+            Cap_File* file = &folder->files[i];
+            Ast* ast = &file->ast;
+            massert(ast->kind == ast_top_level, str("expected ast_top_level"));
+            for (u64 j = 0; j < ast->top_level.top_level_statements_count; j++) {
+                bool is_complete = global_statement_is_complete[statement_index];
+                if (is_complete) {
+                    statement_index += 1;
+                    continue;
+                }
+
+                Ast* top_level_statement_ast = &ast->top_level.top_level_statements[j];
+                Statement top_level_statement = sem_statement_parse(top_level_statement_ast);
+                if (top_level_statement.kind == statement_invalid) {
+                    statement_index += 1;
+                    continue;
+                }
+                folder->global_statements[folder->global_statements_count] = top_level_statement;
+                global_statement_is_complete[statement_index] = true;
+                folder->global_statements_count += 1;
+                statement_index += 1;
+            }
+        }
+    }
+    cap_context.log = true;
+
+    if (folder->global_statements_count != global_statements_count) {
+        u64 statement_index = 0;
+        for (u64 i = 0; i < folder->files_count; i++) {
+            Cap_File* file = &folder->files[i];
+            Ast* ast = &file->ast;
+            massert(ast->kind == ast_top_level, str("expected ast_top_level"));
+            for (u64 j = 0; j < ast->top_level.top_level_statements_count; j++) {
+                Ast* top_level_statement_ast = &ast->top_level.top_level_statements[j];
+                bool is_complete = global_statement_is_complete[statement_index];
+                if (!is_complete) {
+                    // call to log errors
+                    Statement top_level_statement = sem_statement_parse(top_level_statement_ast);
+                    massert(top_level_statement.kind == statement_invalid, str("should be invalid or it would have been completed"));
+                }
+                statement_index += 1;
+            }
+        }
+    }
 
     for (u64 i = 0; i < folder->files_count; i++) {
         Cap_File* file = &folder->files[i];
@@ -166,9 +216,6 @@ void cap_init_context(String path) {
     cap_context.global_arena = arena_create(MB(100), NULL);
     cap_context.active_arena = &cap_context.global_arena;
     cap_context.log = true;
-    cap_context.visited_in_typing_capacity = 8;
-    cap_context.visited_in_typing_count = 0;
-    cap_context.visited_in_typing = cap_alloc(cap_context.visited_in_typing_capacity * sizeof(Variable*));
     cap_context.folders_capacity = 8;
     cap_context.folders = cap_alloc(cap_context.folders_capacity * sizeof(Cap_Folder*));
     cap_context.folders_count = 0;
@@ -196,16 +243,16 @@ void cap_init_context(String path) {
     Type* type = cap_alloc(sizeof(Type));
     *type = sem_void_type();
     Variable* void_var = sem_add_variable(str("void"), sem_type_type(), NULL);
-    void_var->know_compile_time_value = true;
-    void_var->compile_time_value = cap_alloc(sizeof(Type**));
-    *(void**)void_var->compile_time_value = type;
+    Type** type_ptr = cap_alloc(sizeof(Type*));
+    *type_ptr = type;
+    sem_set_variable_compile_time_value(void_var, type_ptr);
 
     type = cap_alloc(sizeof(Type));
     *type = sem_type_type();
     Variable* type_var = sem_add_variable(str("type"), sem_type_type(), NULL);
-    type_var->know_compile_time_value = true;
-    type_var->compile_time_value = cap_alloc(sizeof(Type**));
-    *(void**)type_var->compile_time_value = type;
+    type_ptr = cap_alloc(sizeof(Type*));
+    *type_ptr = type;
+    sem_set_variable_compile_time_value(type_var, type_ptr);
 
     for (u64 i = 0; i < 256; i++) {
         String number_str = string_int(i);
@@ -213,23 +260,23 @@ void cap_init_context(String path) {
         type = cap_alloc(sizeof(Type));
         *type = sem_int_type(i);
         Variable* int_var = sem_add_variable(string_append(str("i"), number_str), sem_type_type(), NULL);
-        int_var->know_compile_time_value = true;
-        int_var->compile_time_value = cap_alloc(sizeof(Type**));
-        *(void**)int_var->compile_time_value = type;
+        type_ptr = cap_alloc(sizeof(Type*));
+        *type_ptr = type;
+        sem_set_variable_compile_time_value(int_var, type_ptr);
 
         type = cap_alloc(sizeof(Type));
         *type = sem_float_type(i);
         Variable* float_var = sem_add_variable(string_append(str("f"), number_str), sem_type_type(), NULL);
-        float_var->know_compile_time_value = true;
-        float_var->compile_time_value = cap_alloc(sizeof(Type**));
-        *(void**)float_var->compile_time_value = type;
+        type_ptr = cap_alloc(sizeof(Type*));
+        *type_ptr = type;
+        sem_set_variable_compile_time_value(float_var, type_ptr);
 
         type = cap_alloc(sizeof(Type));
         *type = sem_uint_type(i);
         Variable* uint_var = sem_add_variable(string_append(str("u"), number_str), sem_type_type(), NULL);
-        uint_var->know_compile_time_value = true;
-        uint_var->compile_time_value = cap_alloc(sizeof(Type**));
-        *(void**)uint_var->compile_time_value = type;
+        type_ptr = cap_alloc(sizeof(Type*));
+        *type_ptr = type;
+        sem_set_variable_compile_time_value(uint_var, type_ptr);
     }
 
     if (path.data[path.length - 1] == '/' || path.data[path.length - 1] == '\\') {
