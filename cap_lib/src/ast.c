@@ -956,10 +956,16 @@ bool ast_parse_as_function_declaration(Tokens tokens, u64* i, Cap_File* file) {
     if (token.kind != token_paren_open) return false;
     token_next(tokens, &tid);
 
+    u64 paren_count = 1;
     while (true) {
         token = token_get(tokens, &tid);
-        if (token.kind == token_paren_close) break;
+        if (token.kind == token_paren_open) paren_count += 1;
+        if (token.kind == token_paren_close) {
+            paren_count -= 1;
+            if (paren_count == 0) break;
+        }
         if (token.kind == token_end_file) return false;
+        if (token.kind == token_end_statement) return false;
         token_next(tokens, &tid);
     }
     token_next(tokens, &tid);

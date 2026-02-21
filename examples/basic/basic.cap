@@ -1,15 +1,22 @@
 
+type i32 = int_type(32)
 
-type bar(i32 a){
+type test(i32 a){
     return i32
 }
 
-type foo = struct { i32 a; i32 b; }
+i32 foo(test(b) a, i32 b){
+    return b
+}
+
+i32 test2(i32 a){
+    return a
+}
+
 
 program main{
-    i32 bob = 89
-    foo a 
-    bar(bob)* c = a.a&
-    c* = 94
-    return a.a
+    i32 a = 3
+    test(a) b = 9
+    i32 c = foo(b)
+    return c
 }

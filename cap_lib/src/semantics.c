@@ -25,25 +25,6 @@ String sem_type_to_string(Type* type) {
         case type_float_literal: {
             return str("float_literal");
         }
-        case type_function: {
-            Type_Function* function = &type->function;
-            String str = {0};
-            for (u64 i = 0; i < function->return_types_count; i++) {
-                Type* return_type = &function->return_types[i];
-                String return_type_str = sem_type_to_string(return_type);
-                str = string_append(str, return_type_str);
-                if (i != function->return_types_count - 1) str = string_append(str, str(", "));
-            }
-            str = string_append(str, str("func("));
-            for (u64 i = 0; i < function->parameter_types_count; i++) {
-                Type* parameter_type = &function->parameter_types[i];
-                String parameter_type_str = sem_type_to_string(parameter_type);
-                str = string_append(str, parameter_type_str);
-                if (i != function->parameter_types_count - 1) str = string_append(str, str(", "));
-            }
-            str = string_append(str, str(")"));
-            return str;
-        }
         case type_type: {
             return str("type");
         }
@@ -133,7 +114,7 @@ String sem_type_to_string(Type* type) {
 Type sem_type_type() {
     Type type = {0};
     type.kind = type_type;
-    type.allocator_id = NO_ALLOCATOR_ID;
+    type.allocator_id = sem_get_new_allocator_id();
     type.origin.kind = type_intrisic_origin;
     type.origin.previous = NULL;
     return type;
@@ -142,7 +123,7 @@ Type sem_type_type() {
 Type sem_void_type() {
     Type type = {0};
     type.kind = type_void;
-    type.allocator_id = NO_ALLOCATOR_ID;
+    type.allocator_id = sem_get_new_allocator_id();
     type.origin.kind = type_intrisic_origin;
     type.origin.previous = NULL;
     return type;
@@ -152,7 +133,7 @@ Type sem_int_type(i64 bits) {
     Type type = {0};
     type.kind = type_int;
     type.int_.bits = bits;
-    type.allocator_id = NO_ALLOCATOR_ID;
+    type.allocator_id = sem_get_new_allocator_id();
     type.origin.kind = type_intrisic_origin;
     type.origin.previous = NULL;
     return type;
@@ -162,7 +143,7 @@ Type sem_uint_type(i64 bits) {
     Type type = {0};
     type.kind = type_uint;
     type.uint.bits = bits;
-    type.allocator_id = NO_ALLOCATOR_ID;
+    type.allocator_id = sem_get_new_allocator_id();
     type.origin.kind = type_intrisic_origin;
     type.origin.previous = NULL;
     return type;
@@ -172,7 +153,7 @@ Type sem_float_type(i64 bits) {
     Type type = {0};
     type.kind = type_float;
     type.float_.bits = bits;
-    type.allocator_id = NO_ALLOCATOR_ID;
+    type.allocator_id = sem_get_new_allocator_id();
     type.origin.kind = type_intrisic_origin;
     type.origin.previous = NULL;
     return type;
@@ -223,7 +204,7 @@ Type sem_type_pointer(Type* underlying_type, Ast* ast_for_error) {
 Type sem_type_int_literal() {
     Type type = {0};
     type.kind = type_int_literal;
-    type.allocator_id = NO_ALLOCATOR_ID;
+    type.allocator_id = sem_get_new_allocator_id();
     type.origin.kind = type_intrisic_origin;
     type.origin.previous = NULL;
     return type;
@@ -232,7 +213,7 @@ Type sem_type_int_literal() {
 Type sem_type_float_literal() {
     Type type = {0};
     type.kind = type_float_literal;
-    type.allocator_id = NO_ALLOCATOR_ID;
+    type.allocator_id = sem_get_new_allocator_id();
     type.origin.kind = type_intrisic_origin;
     type.origin.previous = NULL;
     return type;
@@ -241,7 +222,7 @@ Type sem_type_float_literal() {
 Type sem_type_invalid() {
     Type type = {0};
     type.kind = type_invalid;
-    type.allocator_id = NO_ALLOCATOR_ID;
+    type.allocator_id = sem_get_new_allocator_id();
     type.origin.kind = type_intrisic_origin;
     type.origin.previous = NULL;
     return type;
@@ -252,7 +233,7 @@ Type sem_type_multiple_value(Type* types, u64 types_count) {
     type.kind = type_multiple_value;
     type.multiple_value.types = types;
     type.multiple_value.types_count = types_count;
-    type.allocator_id = NO_ALLOCATOR_ID;
+    type.allocator_id = sem_get_new_allocator_id();
     type.origin.previous = NULL;
     return type;
 }
@@ -302,29 +283,6 @@ Type sem_type_new_allocator_ids(Type* type) {
             Type new_type = *type;
             new_type.kind = type_multiple_value;
             new_type.multiple_value = new_multi_value;
-            new_type.allocator_id = NO_ALLOCATOR_ID;
-            return new_type;
-        }
-        case type_function: {
-            Type_Function* function = &type->function;
-            Type_Function new_function = *function;
-            new_function.return_types = cap_alloc(function->return_types_count * sizeof(Type));
-            new_function.return_types_count = function->return_types_count;
-            for (u64 i = 0; i < function->return_types_count; i++) {
-                Type* return_type = &function->return_types[i];
-                Type new_return_type = sem_type_new_allocator_ids(return_type);
-                new_function.return_types[i] = new_return_type;
-            }
-            new_function.parameter_types = cap_alloc(function->parameter_types_count * sizeof(Type));
-            new_function.parameter_types_count = function->parameter_types_count;
-            for (u64 i = 0; i < function->parameter_types_count; i++) {
-                Type* parameter_type = &function->parameter_types[i];
-                Type new_parameter_type = sem_type_new_allocator_ids(parameter_type);
-                new_function.parameter_types[i] = new_parameter_type;
-            }
-            Type new_type = *type;
-            new_type.kind = type_function;
-            new_type.function = new_function;
             new_type.allocator_id = sem_get_new_allocator_id();
             return new_type;
         }
@@ -371,35 +329,49 @@ bool sem_type_is_ptr_to(Type* type, Type* underlying_type) {
     return sem_type_equal(&ref_underlying_type, underlying_type, false, true);
 }
 
-Type sem_function_type(Type* return_types, u64 return_types_count, Type* parameter_types, u64 parameter_types_count, Allocator_Id allocator_id) {
-    Type type = {0};
-    type.kind = type_function;
-    type.function.return_types = return_types;
-    type.function.return_types_count = return_types_count;
-    type.function.parameter_types = parameter_types;
-    type.function.parameter_types_count = parameter_types_count;
-    type.allocator_id = allocator_id;
-    return type;
+bool __sem_origin_match(Type_Origin* origin_a, Type_Origin* origin_b, bool try_a, bool try_b) {
+    if (origin_a->previous != NULL && try_a) {
+        if (__sem_origin_match(origin_a->previous, origin_b, try_a, false)) return true;
+    }
+    if (origin_b->previous != NULL && try_b) {
+        if (__sem_origin_match(origin_a, origin_b->previous, false, try_b)) return true;
+    }
+    if (origin_a->kind != origin_b->kind) return false;
+    switch (origin_a->kind) {
+        case type_variable_origin: {
+            Variable* variable_a = origin_a->variable;
+            Variable* variable_b = origin_b->variable;
+            return variable_a == variable_b;
+        }
+        case type_intrisic_origin: {
+            return true;
+        }
+        case type_call_origin: {
+            Type_Call_Origin* call_origin_a = origin_a->call_origin;
+            Type_Call_Origin* call_origin_b = origin_b->call_origin;
+            if (call_origin_a->function != call_origin_b->function) return false;
+            if (call_origin_a->parameter_count != call_origin_b->parameter_count) return false;
+            for (u64 i = 0; i < call_origin_a->parameter_count; i++) {
+                Type* parameter_a = &call_origin_a->parameter_types[i];
+                Type* parameter_b = &call_origin_b->parameter_types[i];
+                massert(sem_type_equal(parameter_a, parameter_b, false, true), str("expected equal types"));
+                void* compile_time_value_a = call_origin_a->parameter_compile_time_values[i];
+                void* compile_time_value_b = call_origin_b->parameter_compile_time_values[i];
+                if (!sem_comile_time_value_is_equal(parameter_a, compile_time_value_a, compile_time_value_b)) return false;
+            }
+            return true;
+        }
+    }
+}
+
+bool _sem_origin_match(Type_Origin* origin_a, Type_Origin* origin_b) {
+    return __sem_origin_match(origin_a, origin_b, true, true);
 }
 
 bool sem_type_equal(Type* type_a, Type* type_b, bool check_allocator, bool check_origin) {
     if (type_a->kind != type_b->kind) return false;
     if (check_origin) {
-        if (type_a->origin.kind != type_b->origin.kind) return false;
-        switch (type_a->origin.kind) {
-            case type_variable_origin: {
-                Variable* variable_a = type_a->origin.variable;
-                Variable* variable_b = type_b->origin.variable;
-                return variable_a == variable_b;
-            }
-            case type_intrisic_origin: {
-                break;
-            }
-            case type_call_origin: {
-                massert(false, str("not implemented"));
-                break;
-            }
-        }
+        if (!_sem_origin_match(&type_a->origin, &type_b->origin)) return false;
     }
     if (check_allocator) {
         u64 allocator_id_a = type_a->allocator_id;
@@ -434,23 +406,6 @@ bool sem_type_equal(Type* type_a, Type* type_b, bool check_allocator, bool check
             }
             return true;
         }
-        case type_function: {
-            Type_Function* function_a = &type_a->function;
-            Type_Function* function_b = &type_b->function;
-            if (function_a->return_types_count != function_b->return_types_count) return false;
-            if (function_a->parameter_types_count != function_b->parameter_types_count) return false;
-            for (u64 i = 0; i < function_a->return_types_count; i++) {
-                Type* return_type_a = &function_a->return_types[i];
-                Type* return_type_b = &function_b->return_types[i];
-                if (!sem_type_equal(return_type_a, return_type_b, check_allocator, check_origin)) return false;
-            }
-            for (u64 i = 0; i < function_a->parameter_types_count; i++) {
-                Type* parameter_type_a = &function_a->parameter_types[i];
-                Type* parameter_type_b = &function_b->parameter_types[i];
-                if (!sem_type_equal(parameter_type_a, parameter_type_b, check_allocator, check_origin)) return false;
-            }
-            return true;
-        }
         case type_float: {
             if (type_a->float_.bits != type_b->float_.bits) return false;
             return true;
@@ -482,70 +437,89 @@ bool sem_type_equal(Type* type_a, Type* type_b, bool check_allocator, bool check
     }
 }
 
-void _sem_get_dependent_variable_in_expression(Expression* expression, Expression*** out_dependent_expressions, u64* out_count, u64* out_capacity,
+bool _sem_get_dependent_variable_in_expression(Expression* expression, Expression*** out_dependent_expressions, u64* out_count, u64* out_capacity,
                                                Function_Implementation*** out_implementations, u64* out_implementations_count,
                                                u64* out_implementations_capacity) {
     switch (expression->kind) {
+        case expression_compile_time_value: {
+            return true;
+        }
+        case expression_uint_type:
+        case expression_int_type: {
+            return true;
+        }
+        case expression_alloc: {
+            Expression* count = expression->alloc.count;
+            return _sem_get_dependent_variable_in_expression(count, out_dependent_expressions, out_count, out_capacity, out_implementations,
+                                                             out_implementations_count, out_implementations_capacity);
+        }
         case expression_struct_field_access: {
             Expression* struct_value = expression->struct_field_access.struct_value;
-            _sem_get_dependent_variable_in_expression(struct_value, out_dependent_expressions, out_count, out_capacity, out_implementations,
-                                                      out_implementations_count, out_implementations_capacity);
-            return;
+            return _sem_get_dependent_variable_in_expression(struct_value, out_dependent_expressions, out_count, out_capacity, out_implementations,
+                                                             out_implementations_count, out_implementations_capacity);
         }
         case expression_passthrough: {
             Expression* expr = expression->passthrough.expr;
-            _sem_get_dependent_variable_in_expression(expr, out_dependent_expressions, out_count, out_capacity, out_implementations, out_implementations_count,
-                                                      out_implementations_capacity);
-            return;
+            return _sem_get_dependent_variable_in_expression(expr, out_dependent_expressions, out_count, out_capacity, out_implementations,
+                                                             out_implementations_count, out_implementations_capacity);
         }
         case expression_multiple_values_access: {
             Expression* multiple_values_value = expression->multiple_values_access.multiple_values_value;
-            _sem_get_dependent_variable_in_expression(multiple_values_value, out_dependent_expressions, out_count, out_capacity, out_implementations,
-                                                      out_implementations_count, out_implementations_capacity);
-            return;
+            return _sem_get_dependent_variable_in_expression(multiple_values_value, out_dependent_expressions, out_count, out_capacity, out_implementations,
+                                                             out_implementations_count, out_implementations_capacity);
         }
         case expression_variable: {
             ptr_append(*out_dependent_expressions, *out_count, *out_capacity, expression);
-            return;
+            return true;
         }
         case expression_dereference: {
-            _sem_get_dependent_variable_in_expression(expression->dereference.expr, out_dependent_expressions, out_count, out_capacity, out_implementations,
-                                                      out_implementations_count, out_implementations_capacity);
-            return;
+            return _sem_get_dependent_variable_in_expression(expression->dereference.expr, out_dependent_expressions, out_count, out_capacity,
+                                                             out_implementations, out_implementations_count, out_implementations_capacity);
         }
         case expression_cast: {
-            _sem_get_dependent_variable_in_expression(expression->cast.expr, out_dependent_expressions, out_count, out_capacity, out_implementations,
-                                                      out_implementations_count, out_implementations_capacity);
-            return;
+            return _sem_get_dependent_variable_in_expression(expression->cast.expr, out_dependent_expressions, out_count, out_capacity, out_implementations,
+                                                             out_implementations_count, out_implementations_capacity);
         }
         case expression_reference: {
-            _sem_get_dependent_variable_in_expression(expression->reference.expr, out_dependent_expressions, out_count, out_capacity, out_implementations,
-                                                      out_implementations_count, out_implementations_capacity);
-            return;
+            return _sem_get_dependent_variable_in_expression(expression->reference.expr, out_dependent_expressions, out_count, out_capacity,
+                                                             out_implementations, out_implementations_count, out_implementations_capacity);
         }
-        case expression_function_call: {
-            Function_Implementation* implementation = expression->function_call.implementation;
+        case expression_function_call_external: {
+            log_error_ast(expression->ast, "external function calls are not supported at compile time");
+            return false;
+        }
+        case expression_function_call_internal: {
+            Function_Implementation* implementation = expression->internal_call.implementation;
             ptr_append(*out_implementations, *out_implementations_count, *out_implementations_capacity, implementation);
-            for (u64 i = 0; i < expression->function_call.parameter_count; i++) {
-                Expression* parameter = &expression->function_call.parameters[i];
-                _sem_get_dependent_variable_in_expression(parameter, out_dependent_expressions, out_count, out_capacity, out_implementations,
-                                                          out_implementations_count, out_implementations_capacity);
+            bool ret = true;
+            for (u64 i = 0; i < expression->internal_call.parameter_count; i++) {
+                Expression* parameter = &expression->internal_call.parameters[i];
+                bool res = _sem_get_dependent_variable_in_expression(parameter, out_dependent_expressions, out_count, out_capacity, out_implementations,
+                                                                     out_implementations_count, out_implementations_capacity);
+                ret = ret && res;
             }
-            return;
+            return ret;
         }
         case expression_struct: {
+            bool ret = true;
             for (u64 i = 0; i < expression->struct_.field_count; i++) {
                 Expression* field_type = &expression->struct_.field_types[i];
-                _sem_get_dependent_variable_in_expression(field_type, out_dependent_expressions, out_count, out_capacity, out_implementations,
-                                                          out_implementations_count, out_implementations_capacity);
+                bool res = _sem_get_dependent_variable_in_expression(field_type, out_dependent_expressions, out_count, out_capacity, out_implementations,
+                                                                     out_implementations_count, out_implementations_capacity);
+                ret = ret && res;
             }
-            return;
+            return ret;
         }
-        case expression_invalid:
+        case expression_variable_declaration: {
+            log_error_ast(expression->ast, "variable declarations are not supported at compile time");
+            return false;
+        }
         case expression_int:
         case expression_float:
-        case expression_variable_declaration:
-            return;
+            return true;
+        case expression_invalid:
+            log_error_ast(expression->ast, "invalid expression not supported at compile time");
+            return false;
     }
 }
 
@@ -569,7 +543,7 @@ void* _sem_evaluate_expression_trivially(Expression* expression) {
         }
         case expression_variable: {
             Variable* variable = expression->variable.variable;
-            massert(variable->know_compile_time_value, str("expected compile time value"));
+            massert(variable->compile_time_value, str("expected compile time value"));
             void* value = variable->compile_time_value;
             void** value_ptr = cap_alloc(sizeof(void*));
             *value_ptr = value;
@@ -586,6 +560,9 @@ void* _sem_evaluate_expression_trivially(Expression* expression) {
                 return sem_evaluate_expression(underlying_expr);
             }
             return NULL;
+        }
+        case expression_compile_time_value: {
+            return expression->compile_time_value.value;
         }
         default:
             return NULL;
@@ -615,7 +592,9 @@ bool sem_comile_time_value_is_equal(Type* type, void* value_a, void* value_b) {
             i64 bits = type->int_.bits;
             i64 bytes = bits / 8;
             char a[bytes];
+            memset(a, 0, bytes);
             char b[bytes];
+            memset(b, 0, bytes);
             memcpy(a, value_a, bytes);
             memcpy(b, value_b, bytes);
             return memcmp(a, b, bytes) == 0;
@@ -624,7 +603,9 @@ bool sem_comile_time_value_is_equal(Type* type, void* value_a, void* value_b) {
             i64 bits = type->uint.bits;
             i64 bytes = bits / 8;
             char a[bytes];
+            memset(a, 0, bytes);
             char b[bytes];
+            memset(b, 0, bytes);
             memcpy(a, value_a, bytes);
             memcpy(b, value_b, bytes);
             return memcmp(a, b, bytes) == 0;
@@ -633,7 +614,9 @@ bool sem_comile_time_value_is_equal(Type* type, void* value_a, void* value_b) {
             i64 bits = type->float_.bits;
             i64 bytes = bits / 8;
             char a[bytes];
+            memset(a, 0, bytes);
             char b[bytes];
+            memset(b, 0, bytes);
             memcpy(a, value_a, bytes);
             memcpy(b, value_b, bytes);
             return memcmp(a, b, bytes) == 0;
@@ -651,11 +634,6 @@ bool sem_comile_time_value_is_equal(Type* type, void* value_a, void* value_b) {
             void* b = *(void**)value_b;
             return sem_comile_time_value_is_equal(underlying_type, a, b);
         }
-        case type_function: {
-            Function* a_function = *(Function**)value_a;
-            Function* b_function = *(Function**)value_b;
-            return a_function == b_function;
-        }
         case type_pointer:
         case type_void:
         case type_invalid:
@@ -672,11 +650,21 @@ void* _sem_evaluate_expression(Expression* expression) {
     Function_Implementation** implementations = NULL;
     u64 implementations_capacity = 0;
     u64 implementations_count = 0;
-    _sem_get_dependent_variable_in_expression(expression, &variable_exprs, &variable_exprs_count, &variable_exprs_capacity, &implementations,
-                                              &implementations_count, &implementations_capacity);
+    bool res = _sem_get_dependent_variable_in_expression(expression, &variable_exprs, &variable_exprs_count, &variable_exprs_capacity, &implementations,
+                                                         &implementations_count, &implementations_capacity);
+    if (!res) return NULL;
     for (u64 i = 0; i < implementations_count; i++) {
         Function_Implementation* implementation = implementations[i];
         sem_complete_implementation(implementation);
+        if (!implementation->is_complete) {
+            log_error_ast(expression->ast, "could not evaluate expression because function implementation is not complete");
+            return NULL;
+        }
+        if (implementation->lost_compile_time_evaluatable_at) {
+            log_error_ast(expression->ast, "could not evaluate expression because function implementation is not evaluateable at compile time");
+            log_info_ast(implementation->lost_compile_time_evaluatable_at, "expression making function not compile time evaluable");
+            return NULL;
+        }
     }
 
     for (u64 i = 0; i < variable_exprs_count; i++) {
@@ -688,7 +676,7 @@ void* _sem_evaluate_expression(Expression* expression) {
             log_info_ast(variable->lost_constant_at_ast, "where variable lost its constantness");
             return NULL;
         }
-        if (variable->know_compile_time_value) {
+        if (variable->compile_time_value) {
             continue;
         }
         if (!variable->initial_value) {
@@ -709,17 +697,19 @@ void* _sem_evaluate_expression(Expression* expression) {
 }
 
 void sem_set_variable_compile_time_value(Variable* var, void* value) {
-    massert(!var->know_compile_time_value, str("variable already has a compile time value"));
+    massert(!var->compile_time_value, str("variable already has a compile time value"));
     if (var->type.kind == type_type) {
         Type** type_ptr = value;
         Type* type = *type_ptr;
         massert(type != NULL, str("type was found to be null"));
         Type type_new = *type;
 
-        Type_Origin* previous = &type_new.origin;
+        Type_Origin previous = type_new.origin;
         Type_Origin new_origin = {0};
         new_origin.kind = type_variable_origin;
-        new_origin.previous = previous;
+        new_origin.variable = var;
+        new_origin.previous = cap_alloc(sizeof(Type_Origin));
+        *new_origin.previous = previous;
         type_new.origin = new_origin;
 
         Type* new_type_ptr = cap_alloc(sizeof(Type));
@@ -727,10 +717,10 @@ void sem_set_variable_compile_time_value(Variable* var, void* value) {
         *(Type**)value = new_type_ptr;
     }
     var->compile_time_value = value;
-    var->know_compile_time_value = true;
 }
 
 void* sem_evaluate_expression(Expression* expression) {
+    if (expression->value != NULL) return expression->value;
     void* value = _sem_evaluate_expression(expression);
     if (value == NULL) return NULL;
     if (expression->type.kind == type_type) {
@@ -742,16 +732,9 @@ void* sem_evaluate_expression(Expression* expression) {
         *new_type = type_new;
         Type** new_type_ptr = cap_alloc(sizeof(Type*));
         *new_type_ptr = new_type;
-        return new_type_ptr;
-    } else if (expression->type.kind == type_function) {
-        Function** function_ptr = value;
-        Function* function = *function_ptr;
-        if (function == NULL) {
-            log_error_ast(expression->ast, "function was found to be null");
-            return NULL;
-        }
-        return function_ptr;
+        value = new_type_ptr;
     }
+    expression->value = value;
     return value;
 }
 
@@ -773,54 +756,108 @@ Function sem_function_parse(Ast* ast) {
     massert(ast->kind == ast_function_declaration, str("expected function declaration"));
     Ast_Function_Declaration* function_declaration = &ast->function_declaration;
 
-    u64 return_types_capacity = 8;
-    u64 return_types_count = 0;
-    Type* return_types = cap_alloc(return_types_capacity * sizeof(Type));
-
-    for (u64 i = 0; i < function_declaration->return_types_count; i++) {
-        Ast* return_type = &function_declaration->return_types[i];
-        Type return_type_complete = sem_type_parse(return_type);
-        if (return_type_complete.kind == type_invalid) return (Function){0};
-        ptr_append(return_types, return_types_count, return_types_capacity, return_type_complete);
-    }
-
-    u64 parameters_capacity = 8;
-    u64 parameters_count = 0;
-    String* parameter_names = cap_alloc(parameters_capacity * sizeof(String));
-
-    u64 parameter_types_count = 0;
-    u64 parameter_types_capacity = 8;
-    Type* parameter_types = cap_alloc(parameter_types_capacity * sizeof(Type));
+    String name = function_declaration->name;
 
     for (u64 i = 0; i < function_declaration->parameters_count; i++) {
-        Ast* parameter = &function_declaration->parameters[i];
-        massert(parameter->kind == ast_function_declaration_parameter, str("expected function declaration parameter"));
-        Ast* parameter_type_ast = parameter->function_declaration_parameters.type;
-        Type parameter_type = sem_type_parse(parameter_type_ast);
-        if (parameter_type.kind == type_invalid) return (Function){0};
-        String name = parameter->function_declaration_parameters.name;
-        ptr_append(parameter_names, parameters_count, parameters_capacity, name);
-        ptr_append(parameter_types, parameter_types_count, parameter_types_capacity, parameter_type);
+        Ast* parameter_ast = &function_declaration->parameters[i];
+        String* name = &parameter_ast->function_declaration_parameters.name;
+        for (u64 j = i + 1; j < function_declaration->parameters_count; j++) {
+            Ast* parameter_ast2 = &function_declaration->parameters[j];
+            String* name2 = &parameter_ast2->function_declaration_parameters.name;
+            if (string_equal(*name, *name2)) {
+                log_error_ast(parameter_ast2, "parameter %.*s already declared", str_info(*name));
+                return (Function){0};
+            }
+        }
     }
 
-    Type function_type = sem_function_type(return_types, return_types_count, parameter_types, parameter_types_count, NO_ALLOCATOR_ID);
-    return sem_create_function(function_type, parameter_names, ast);
+    Ast* body_ast = ast->function_declaration.body;
+    if (body_ast != NULL) {
+        return sem_create_function_internal(name, ast);
+    } else {
+        return sem_create_function_external(name, ast);
+    }
 }
 
-void sem_function_add_types(Function* function) {
-    Ast* ast = function->ast;
-    massert(ast->kind == ast_function_declaration, str("expected function declaration"));
+bool sem_type_is_valid_external_type(Type* type) {
+    switch (type->kind) {
+        case type_int_literal:
+        case type_float_literal:
+        case type_invalid:
+        case type_multiple_value:
+        case type_type:
+            return false;
+        case type_pointer:
+            return sem_type_is_valid_external_type(type->pointer.underlying_type);
+        case type_reference:
+            return sem_type_is_valid_external_type(type->reference.underlying_type);
+        case type_struct: {
+            for (u64 i = 0; i < type->struct_.field_count; i++) {
+                Type* field_type = type->struct_.field_types[i];
+                if (!sem_type_is_valid_external_type(field_type)) return false;
+            }
+            return true;
+        }
+        case type_int:
+        case type_float:
+        case type_uint:
+        case type_void:
+            return true;
+    }
 }
 
-Function sem_create_function(Type function_type, String* parameter_names, Ast* ast) {
+Function sem_create_function_external(String name, Ast* ast) {
     Function function = {0};
-    function.function_type = function_type;
-    function.parameter_names = parameter_names;
+    function.name = name;
     function.scope_created_in = cap_context.scope;
+    function.ast = ast;
+    function.kind = function_external;
+    function.namespace_id = cap_context.namespace_we_are_in;
 
-    function.implementations_capacity = 1;
-    function.implementations_count = 0;
-    function.implementations = cap_alloc(sizeof(Function_Implementation));
+    massert(ast->kind == ast_function_declaration, str("expected ast_function_declaration"));
+    u64 return_count = ast->function_declaration.return_types_count;
+    if (return_count != 1) {
+        log_error_ast(ast, "external functions should have only 1 return type, but got %llu", return_count);
+        return (Function){0};
+    }
+    Type return_type = sem_type_parse(&ast->function_declaration.return_types[0]);
+    if (return_type.kind == type_invalid) return (Function){0};
+    if (!sem_type_is_valid_external_type(&return_type)) {
+        log_error_ast(ast, "external function return type is not a external valid return type");
+        return (Function){0};
+    }
+    function.external.return_type = return_type;
+
+    u64 parameter_count = ast->function_declaration.parameters_count;
+    Type* parameter_types = cap_alloc(parameter_count * sizeof(Type));
+    String* parameter_names = cap_alloc(parameter_count * sizeof(String));
+    for (u64 i = 0; i < parameter_count; i++) {
+        Ast* parameter_ast = &ast->function_declaration.parameters[i];
+        Type parameter_type = sem_type_parse(parameter_ast);
+        if (parameter_type.kind == type_invalid) return (Function){0};
+        if (!sem_type_is_valid_external_type(&parameter_type)) {
+            log_error_ast(ast, "external function parameter type is not a external valid parameter type");
+            return (Function){0};
+        }
+        parameter_types[i] = parameter_type;
+        parameter_names[i] = parameter_ast->function_declaration_parameters.name;
+    }
+    function.external.parameter_types = parameter_types;
+    function.external.parameter_names = parameter_names;
+    function.external.parameter_count = parameter_count;
+
+    return function;
+}
+
+Function sem_create_function_internal(String name, Ast* ast) {
+    Function function = {0};
+    function.name = name;
+    function.scope_created_in = cap_context.scope;
+    function.kind = function_internal;
+
+    function.internal.implementations_capacity = 1;
+    function.internal.implementations_count = 0;
+    function.internal.implementations = cap_alloc(sizeof(Function_Implementation));
     function.ast = ast;
     function.namespace_id = cap_context.namespace_we_are_in;
     return function;
@@ -833,17 +870,35 @@ Allocator_Id sem_get_new_allocator_id() {
     return id;
 }
 
-void sem_connect_allocator_ids(Allocator_Id id1, Allocator_Id id2) {
-    if (id1 == NO_ALLOCATOR_ID || id2 == NO_ALLOCATOR_ID) return;
+void sem_connect_allocator_ids(Allocator_Id id1, Allocator_Id id2, Ast* ast_for_error) {
     Allocator* data1 = cap_context.allocator_map.allocator[id1];
     Allocator* data2 = cap_context.allocator_map.allocator[id2];
+    bool replace_data1 = false;
+    if (data1->variable == NULL && data2->variable == NULL) {
+        replace_data1 = true;
+    } else if (data1->variable != NULL && data2->variable == NULL) {
+        replace_data1 = false;
+    } else if (data1->variable == NULL && data2->variable != NULL) {
+        replace_data1 = true;
+    } else {
+        log_error_ast(ast_for_error, "can't connect up allocators both are defined already: %.*s and %.*s", str_info(data1->variable->name),
+                      str_info(data2->variable->name));
+        return;
+    }
+
     for (u64 i = 0; i < cap_context.allocator_map.allocator_count; i++) {
         Allocator** data = &cap_context.allocator_map.allocator[i];
-        if (*data == data2) *data = data1;
+        if (replace_data1) {
+            if (*data == data1) *data = data2;
+        } else {
+            if (*data == data2) *data = data1;
+        }
     }
 }
 
 void sem_set_id_allocator(Allocator_Id id, Allocator* allocator) {
+    Allocator* old_allocator = cap_context.allocator_map.allocator[id];
+    massert(old_allocator->variable == NULL, str("expected no allocator to be set"));
     *(cap_context.allocator_map.allocator[id]) = *allocator;
 }
 
@@ -851,14 +906,14 @@ Allocator* sem_get_allocator(Allocator_Id id) {
     return cap_context.allocator_map.allocator[id];
 }
 
-bool _sem_variable_fits_namespace(Variable* variable, String* namespaces, u64 namespaces_count, u64 namespace_we_are_in) {
+bool _sem_namespace_fits_namespace(u64 namespace, String* namespaces, u64 namespaces_count, u64 namespace_we_are_in) {
     Cap_Folder* folder = cap_context.folders[namespace_we_are_in];
-    if (variable->namespace == namespace_we_are_in && namespaces_count == 0) return true;
+    if (namespace == namespace_we_are_in && namespaces_count == 0) return true;
     for (u64 j = 0; j < folder->folders_count; j++) {
         Cap_Folder* child_folder = folder->folders[j];
         String alias = folder->folder_namespace_aliases[j];
         if (string_equal(alias, str(""))) {
-            if (_sem_variable_fits_namespace(variable, namespaces, namespaces_count, child_folder->namespace_id)) return true;
+            if (_sem_namespace_fits_namespace(namespace, namespaces, namespaces_count, child_folder->namespace_id)) return true;
         }
     }
     if (namespaces_count == 0) return false;
@@ -867,15 +922,20 @@ bool _sem_variable_fits_namespace(Variable* variable, String* namespaces, u64 na
         Cap_Folder* child_folder = folder->folders[j];
         String alias = folder->folder_namespace_aliases[j];
         if (string_equal(alias, namespace_alias)) {
-            if (_sem_variable_fits_namespace(variable, namespaces + 1, namespaces_count - 1, child_folder->namespace_id)) return true;
+            if (_sem_namespace_fits_namespace(namespace, namespaces + 1, namespaces_count - 1, child_folder->namespace_id)) return true;
         }
     }
     return false;
 }
 
-bool sem_variable_fits_namespace(Variable* variable, String* namespaces, u64 namespaces_count) {
+bool sem_namespace_fits_namespace(u64 namespace, String* namespaces, u64 namespaces_count) {
     u64 namespace_we_are_in = cap_context.namespace_we_are_in;
-    return _sem_variable_fits_namespace(variable, namespaces, namespaces_count, namespace_we_are_in);
+    return _sem_namespace_fits_namespace(namespace, namespaces, namespaces_count, namespace_we_are_in);
+}
+
+bool sem_variable_fits_namespace(Variable* variable, String* namespaces, u64 namespaces_count) {
+    u64 variable_namespace = variable->namespace;
+    return sem_namespace_fits_namespace(variable_namespace, namespaces, namespaces_count);
 }
 
 Variable* __sem_find_variable(String name, String* namespaces, u64 namespaces_count, Ast* ast_for_error, Scope* scope) {
@@ -913,6 +973,101 @@ Variable* sem_find_variable(String name, String* namespaces, u64 namespaces_coun
     return variable;
 }
 
+Function* _sem_find_alloc_variable(Type* allocator_type, Scope* scope, Ast* ast_for_error) {
+    massert(false, str("not implemented"));
+    for (u64 i = 0; i < scope->alloc_function_variables_count; i++) {
+        Function* alloc_function = scope->alloc_function_variables[i];
+        // massert(alloc_function->parameter_count == 3, str("expected 3 parameters"));
+        // Type* func_allocator_type = &function_type->function.parameter_types[0];
+        // if (sem_type_equal(allocator_type, func_allocator_type, false, true)) {
+        // return variable;
+        // }
+    }
+    if (scope->parent != NULL) {
+        return _sem_find_alloc_variable(allocator_type, scope->parent, ast_for_error);
+    }
+    if (ast_for_error) log_error_ast(ast_for_error, "could not find alloc function");
+    return NULL;
+}
+
+Function* sem_find_alloc_variable(Type* allocator_type, Ast* ast_for_error) {
+    Scope* scope = cap_context.scope;
+    return _sem_find_alloc_variable(allocator_type, scope, ast_for_error);
+}
+
+Variable* sem_add_alloc_variable(String name, Type type, Ast* ast, Function* function) {
+    massert(false, str("not implemented"));
+    return NULL;
+    // Variable variable = {0};
+    // variable.namespace = cap_context.namespace_we_are_in;
+    // variable.name = name;
+    // variable.type = type;
+    // variable.ast = ast;
+    // variable.lost_constant_at_ast = NULL;
+    //
+    // massert(string_equal(name, str("alloc")), str("expected alloc"));
+    //
+    // u64 parameter_count = function->parameter_count;
+    // if (parameter_count != 3) {
+    //     log_error_ast(ast, "alloc function should have 3 parameters: ((Allocator_Type)* allocator, u64 size, u64 alignment)");
+    //     return NULL;
+    // }
+    // massert(false, str("not implemented"));
+    // return NULL;
+    // Type* allocator_type = &function_type->function.parameter_types[0];
+    // if (allocator_type->kind != type_pointer) {
+    //     log_error_ast(ast, "expected allocator type to be a pointer");
+    //     return NULL;
+    // }
+    //
+    // Type u64_type = sem_uint_type(64);
+    // Type* size_type = &function_type->function.parameter_types[1];
+    // if (sem_type_equal(&u64_type, size_type, false, false)) {
+    //     log_error_ast(ast, "expected u64 size");
+    //     return NULL;
+    // }
+    //
+    // Type* alignment_type = &function_type->function.parameter_types[2];
+    // if (sem_type_equal(&u64_type, alignment_type, false, false)) {
+    //     log_error_ast(ast, "expected u64 alignment");
+    //     return NULL;
+    // }
+    //
+    // Type* return_types = function_type->function.return_types;
+    // u64 return_types_count = function_type->function.return_types_count;
+    // if (return_types_count != 1) {
+    //     log_error_ast(ast, "alloc function should have 1 return type: void*");
+    //     return NULL;
+    // }
+    //
+    // Type void_type = sem_void_type();
+    // Type pointer_type = sem_type_pointer(&void_type, ast);
+    //
+    // Type* return_type = &return_types[0];
+    // if (!sem_type_equal(return_type, &pointer_type, false, false)) {
+    //     log_error_ast(ast, "alloc function should have return type: void*");
+    //     return NULL;
+    // }
+    //
+    // Function** function_ptr_ptr = cap_alloc(sizeof(Function*));
+    // *function_ptr_ptr = function;
+    //
+    // Variable* variable_ptr = cap_alloc(sizeof(Variable));
+    // *variable_ptr = variable;
+    // sem_set_variable_compile_time_value(variable_ptr, function_ptr_ptr);
+    // Scope* scope = cap_context.scope;
+    // ptr_append(scope->alloc_function_variables, scope->alloc_function_variables_count, scope->alloc_function_variables_capacity, variable_ptr);
+    // return variable_ptr;
+}
+
+Function* sem_add_function(Function* function) {
+    Function* function_ptr = cap_alloc(sizeof(Function));
+    *function_ptr = *function;
+    Scope* scope = cap_context.scope;
+    ptr_append(scope->function_variables, scope->function_variables_count, scope->function_variables_capacity, function_ptr);
+    return function_ptr;
+}
+
 Variable* sem_add_variable(String name, Type type, Ast* ast) {
     Variable variable = {0};
     variable.namespace = cap_context.namespace_we_are_in;
@@ -922,68 +1077,229 @@ Variable* sem_add_variable(String name, Type type, Ast* ast) {
     variable.lost_constant_at_ast = NULL;
 
     Scope* scope = cap_context.scope;
-    if (variable.type.kind == type_function) {
-        // function operat on a different level with overrideing becuase of function overloading
-        // so we don't just check if the function is already declared
-    } else {
-        Variable* existing = NULL;
-        for (u64 i = 0; i < scope->variables_count; i++) {
-            Variable* v = scope->variables[i];
-            if (string_equal(v->name, variable.name) && sem_variable_fits_namespace(v, NULL, 0)) {
-                existing = v;
-                break;
-            }
-        }
-
-        if (existing != NULL) {
-            if (variable.type.kind != type_function || existing->type.kind != type_function) {
-                log_error_ast(variable.ast, "variable %.*s already declared", str_info(variable.name));
-                return NULL;
-            }
+    Variable* existing = NULL;
+    for (u64 i = 0; i < scope->variables_count; i++) {
+        Variable* v = scope->variables[i];
+        if (string_equal(v->name, variable.name) && sem_variable_fits_namespace(v, NULL, 0)) {
+            existing = v;
+            break;
         }
     }
+
+    if (existing != NULL) {
+        log_error_ast(variable.ast, "variable %.*s already declared", str_info(variable.name));
+        return NULL;
+    }
+
     Variable* variable_ptr = cap_alloc(sizeof(Variable));
     *variable_ptr = variable;
     ptr_append(scope->variables, scope->variables_count, scope->variables_capacity, variable_ptr);
     return variable_ptr;
 }
 
-Function* sem_find_function(String name, String* namespaces, u64 namespaces_count, Type* _parameters, u64 parameter_count, Ast* ast) {
-    // dereference all parameters
-    Type* parameters = cap_alloc(parameter_count * sizeof(Type));
-    for (u64 i = 0; i < parameter_count; i++) {
-        Type* parameter_type = &_parameters[i];
-        if (parameter_type->kind == type_reference) {
-            parameters[i] = sem_type_dereference(parameter_type);
-        } else {
-            parameters[i] = *parameter_type;
+void _sem_value_propagate(void* value, Type* type, Expression* expr, bool* is_match, Expression* casted_parameters_exprs, Variable** parameter_variables,
+                          u64 func_parameters_count) {
+    switch (expr->kind) {
+        case expression_passthrough: {
+            Expression* passthrough_expr = expr->passthrough.expr;
+            _sem_value_propagate(value, type, passthrough_expr, is_match, casted_parameters_exprs, parameter_variables, func_parameters_count);
+            break;
         }
+        case expression_dereference: {
+            Expression* derefed_expr = expr->dereference.expr;
+            void** value_ptr = cap_alloc(sizeof(void*));
+            *value_ptr = value;
+            Type reference_type = sem_type_reference(type, expr->ast);
+            _sem_value_propagate(value_ptr, &reference_type, derefed_expr, is_match, casted_parameters_exprs, parameter_variables, func_parameters_count);
+            break;
+        }
+        case expression_function_call_internal: {
+            for (u64 i = 0; i < expr->internal_call.parameter_count; i++) {
+                Expression* parameter = &expr->internal_call.parameters[i];
+                void* value_p = sem_evaluate_expression(parameter);
+                if (value == NULL) return;
+                // _sem_value_propagate(value_p, &parameter->type, parameter, is_match, casted_parameters_exprs, parameter_variables, func_parameters_count);
+            }
+            break;
+        }
+        case expression_variable: {
+            Variable* variable = expr->variable.variable;
+
+            void* value_deref = *(void**)value;
+            massert(expr->type.kind == type_reference, str("expected reference"));
+            massert(type->kind == type_reference, str("expected reference"));
+            Type* underlying_type = type->reference.underlying_type;
+            if (!sem_type_equal(underlying_type, &variable->type, false, true)) {
+                break;
+            }
+
+            // check that variable is in parse scope
+            bool found = false;
+            u64 var_index = 0;
+            for (u64 i = 0; i < func_parameters_count; i++) {
+                Variable* parameter_variable = parameter_variables[i];
+                if (parameter_variable == NULL) continue;
+                if (variable == parameter_variable) {
+                    var_index = i;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) break;
+
+            if (variable->compile_time_value || variable->initial_value) {
+                if (!variable->compile_time_value) {
+                    variable->compile_time_value = sem_evaluate_expression(variable->initial_value);
+                    if (variable->compile_time_value == NULL) {
+                        *is_match = false;
+                        break;
+                    }
+                }
+                if (!sem_comile_time_value_is_equal(&variable->type, variable->compile_time_value, value_deref)) {
+                    break;
+                }
+            }
+            if (variable->type.kind == type_type) {
+                Type** call_type_ptr = value_deref;
+                Type* call_type = *call_type_ptr;
+                if (call_type->kind == type_int_literal || call_type->kind == type_float_literal || call_type->kind == type_multiple_value ||
+                    call_type->kind == type_reference) {
+                    break;
+                }
+            }
+
+            variable->compile_time_value = value_deref;
+            Expression compile_time_value_expr = sem_compile_time_value_expression(value_deref, variable->type, expr->ast);
+            casted_parameters_exprs[var_index] = compile_time_value_expr;
+            break;
+        }
+        default: {
+            break;
+        }
+    }
+}
+
+Function* sem_find_function(String name, String* namespaces, u64 namespaces_count, Expression** parameters_exprs_in_out, u64* parameter_count_in_out,
+                            Type** return_types_out, u64* return_types_count_out, Ast* ast) {
+    Expression* parameters_exprs = *parameters_exprs_in_out;
+    u64 parameter_count = *parameter_count_in_out;
+    for (u64 i = 0; i < parameter_count; i++) {
+        Expression* parameter_expr = &parameters_exprs[i];
+        *parameter_expr = sem_get_value_if(parameter_expr);
     }
 
     u64 functions_count = 0;
-    Variable** functions = sem_find_functions_with_name_and_namespace(name, namespaces, namespaces_count, &functions_count);
+    Function** functions = sem_find_functions_with_name_and_namespace(name, namespaces, namespaces_count, &functions_count);
     if (functions_count == 0) {
         log_error_ast(ast, "could not find any function %.*s", str_info(name));
         return NULL;
     }
     u64 function_matches_count = 0;
-    Variable** function_matches = cap_alloc(functions_count * sizeof(Variable*));
-    for (u64 i = 0; i < functions_count; i++) {
-        Variable* function = functions[i];
-        Type* function_type = &function->type;
+    bool* function_matches = cap_alloc(functions_count * sizeof(bool));
+    Expression** casted_parameters_exprs_list = cap_alloc(functions_count * sizeof(Expression*));
+    u64* casted_parameters_exprs_counts = cap_alloc(functions_count * sizeof(u64));
+    Type** return_type_lists = cap_alloc(functions_count * sizeof(Type*));
+    u64* return_types_counts = cap_alloc(functions_count * sizeof(u64));
 
+    for (u64 i = 0; i < functions_count; i++) {
+        Function* function = functions[i];
         bool is_match = true;
-        if (function_type->function.parameter_types_count != parameter_count) continue;
-        for (u64 j = 0; j < parameter_count; j++) {
-            Type* function_parameter_type = &function_type->function.parameter_types[j];
-            Type* parameter_type = &parameters[j];
-            if (!sem_type_equal(function_parameter_type, parameter_type, false, true)) {
+
+        Ast* function_ast = function->ast;
+        massert(function_ast->kind == ast_function_declaration, str("expected function declaration"));
+        bool last_log = cap_context.log;
+        cap_context.log = false;
+
+        Scope parse_scope = {0};
+        parse_scope.parent = function->scope_created_in;
+        Scope* last_scope = cap_context.scope;
+        cap_context.scope = &parse_scope;
+
+        u64 func_parameters_count = function_ast->function_declaration.parameters_count;
+        Expression* casted_parameters_exprs = cap_alloc(func_parameters_count * sizeof(Expression));
+        Variable** parameter_variables = cap_alloc(func_parameters_count * sizeof(Variable*));
+        u64 return_types_count = function_ast->function_declaration.return_types_count;
+
+        Type* return_types = cap_alloc(return_types_count * sizeof(Type));
+
+        bool* parameter_parsed = cap_alloc(func_parameters_count * sizeof(bool));
+
+        Type type_type_type = sem_type_type();
+
+        while (true) {
+            bool changed = false;
+            for (u64 i = 0; i < func_parameters_count; i++) {
+                if (parameter_parsed[i]) continue;
+                Ast* parameter_ast = &function_ast->function_declaration.parameters[i];
+                Ast* type_ast = parameter_ast->function_declaration_parameters.type;
+                String* name = &parameter_ast->function_declaration_parameters.name;
+                Expression* parameter_expr = &parameters_exprs[i];
+
+                Expression parameter_type_expr = sem_expression_parse(type_ast);
+                parameter_type_expr = sem_get_value_if(&parameter_type_expr);
+                if (parameter_type_expr.kind == expression_invalid) continue;
+                if (parameter_type_expr.type.kind != type_type) {
+                    is_match = false;
+                    break;
+                }
+
+                Type** value_for_propagate = cap_alloc(sizeof(Type*));
+                *value_for_propagate = &parameter_expr->type;
+                _sem_value_propagate(value_for_propagate, &type_type_type, &parameter_type_expr, &is_match, casted_parameters_exprs, parameter_variables,
+                                     func_parameters_count);
+                if (!is_match) break;
+
+                Type** parameter_type_ptr = sem_evaluate_expression(&parameter_type_expr);
+                if (parameter_type_ptr == NULL) {
+                    is_match = false;
+                    break;
+                }
+                Type* parameter_type_func = *parameter_type_ptr;
+
+                Variable* var = sem_add_variable(*name, *parameter_type_func, parameter_ast);
+                massert(var != NULL, str("expected variable"));
+                changed = true;
+                parameter_parsed[i] = true;
+                parameter_variables[i] = var;
+
+                if (i >= parameter_count) continue;
+                Expression parameter_casted = sem_implicit_cast_without_allocator(parameter_expr, parameter_type_func);
+                if (parameter_casted.kind == expression_invalid) {
+                    is_match = false;
+                    break;
+                }
+                casted_parameters_exprs[i] = parameter_casted;
+                var->initial_value = &casted_parameters_exprs[i];
+            }
+            if (!changed) break;
+            if (!is_match) break;
+        }
+        for (u64 i = 0; i < func_parameters_count; i++) {
+            Expression* parameter_expr = &casted_parameters_exprs[i];
+            if (parameter_expr->kind == expression_invalid) is_match = false;
+            if (!parameter_parsed[i]) is_match = false;
+            if (!is_match) break;
+        }
+
+        for (u64 i = 0; i < return_types_count; i++) {
+            Ast* return_type_ast = &function_ast->function_declaration.return_types[i];
+            Type return_type = sem_type_parse(return_type_ast);
+            if (return_type.kind == type_invalid) {
                 is_match = false;
                 break;
             }
+            return_types[i] = return_type;
         }
+
+        cap_context.log = last_log;
+        cap_context.scope = last_scope;
+
         if (!is_match) continue;
-        function_matches[function_matches_count] = function;
+        function_matches[i] = true;
+        casted_parameters_exprs_list[i] = casted_parameters_exprs;
+        casted_parameters_exprs_counts[i] = func_parameters_count;
+        return_type_lists[i] = return_types;
+        return_types_counts[i] = return_types_count;
         function_matches_count += 1;
     }
     if (function_matches_count == 0) {
@@ -992,18 +1308,30 @@ Function* sem_find_function(String name, String* namespaces, u64 namespaces_coun
     }
     if (function_matches_count > 1) {
         log_error_ast(ast, "to many functions match with the given parameter types");
-        for (u64 i = 0; i < function_matches_count; i++) {
-            Variable* function = function_matches[i];
+        for (u64 i = 0; i < functions_count; i++) {
+            if (!function_matches[i]) continue;
+            Function* function = functions[i];
             log_info_ast(function->ast, "could of meant");
         }
         return NULL;
     }
 
-    Variable* function_var = function_matches[0];
-    massert(function_var->type.kind == type_function, str("expected function"));
-    massert(function_var->know_compile_time_value, str("expected compile time value"));
-    Function** function = function_var->compile_time_value;
-    return *function;
+    u64 match_index = 0;
+    for (u64 i = 0; i < functions_count; i++) {
+        if (!function_matches[i]) continue;
+        match_index = i;
+    }
+
+    Function* function = functions[match_index];
+    Expression* casted_parameters_exprs = casted_parameters_exprs_list[match_index];
+    u64 casted_parameters_exprs_count = casted_parameters_exprs_counts[match_index];
+    Type* return_types = return_type_lists[match_index];
+    u64 return_types_count = return_types_counts[match_index];
+    *parameters_exprs_in_out = casted_parameters_exprs;
+    *parameter_count_in_out = casted_parameters_exprs_count;
+    *return_types_out = return_types;
+    *return_types_count_out = return_types_count;
+    return function;
 }
 
 Expression sem_multiple_values_access(Expression* multiple_values_value, u64 index, Ast* ast) {
@@ -1021,21 +1349,66 @@ Expression sem_multiple_values_access(Expression* multiple_values_value, u64 ind
     return expr;
 }
 
-Expression sem_function_call(Function* function, Expression* parameters, u64 parameter_count, Ast* ast) {
-    for (u64 i = 0; i < parameter_count; i++) {
-        Expression* expr = &parameters[i];
-        Type* parameter_type = &function->function_type.function.parameter_types[i];
-        Expression as_function_type = sem_implicit_cast_without_allocator(expr, parameter_type);
-        if (as_function_type.kind == expression_invalid) return (Expression){0};
-        *expr = as_function_type;
+Expression sem_compile_time_value_expression(void* value, Type type, Ast* ast) {
+    Expression expr = {0};
+    expr.kind = expression_compile_time_value;
+    expr.value = value;
+    expr.compile_time_value.value = value;
+    expr.type = type;
+    expr.ast = ast;
+    return expr;
+}
+
+Expression sem_function_call(Function* function, Expression* parameters, Type* return_types, u64 return_types_count, u64 parameter_count, Ast* ast) {
+    switch (function->kind) {
+        case function_internal: {
+            return sem_function_call_internal(function, parameters, return_types, return_types_count, parameter_count, ast);
+        }
+        case function_external: {
+            return sem_function_call_external(function, parameters, return_types, return_types_count, parameter_count, ast);
+        }
+        case function_intrinsic: {
+            return sem_function_call_intrinsic(function, parameters, return_types, return_types_count, parameter_count, ast);
+        }
+        case function_invalid: {
+            massert(false, str("expected function to be valid"));
+            return (Expression){0};
+        }
     }
+}
+
+Expression sem_function_call_external(Function* function, Expression* parameters, Type* return_types, u64 return_types_count, u64 parameter_count, Ast* ast) {
+    massert(return_types_count == 1, str("expected 1 return type"));
+    cap_context.function_being_built->lost_compile_time_evaluatable_at = ast;
+
+    Expression expression = {0};
+    expression.kind = expression_function_call_external;
+    expression.external_call.function = function;
+    expression.external_call.parameters = parameters;
+    expression.external_call.parameter_count = parameter_count;
+    expression.ast = ast;
+    Type return_type = return_types[0];
+    return_type = sem_type_new_allocator_ids(&return_type);
+    expression.type = return_type;
+    return expression;
+}
+
+Expression sem_function_call_intrinsic(Function* function, Expression* parameters, Type* return_types, u64 return_types_count, u64 parameter_count, Ast* ast) {
+    massert(function->kind == function_intrinsic, str("expected function to be intrinsic"));
+    massert(false, str("not implemented"));
+    return (Expression){0};
+}
+
+Expression sem_function_call_internal(Function* function, Expression* parameters, Type* return_types, u64 return_types_count, u64 parameter_count, Ast* ast) {
+    massert(function->kind == function_internal, str("expected function to be internal"));
 
     Function_Implementation* implementation = cap_alloc(sizeof(Function_Implementation));
     implementation->function = function;
     implementation->parameter_count = parameter_count;
     implementation->parameters = cap_alloc(parameter_count * sizeof(Variable*));
-    implementation->body.parent = cap_context.scope;
+    implementation->body.parent = function->scope_created_in;
     implementation->is_complete = false;
+    implementation->lost_compile_time_evaluatable_at = false;
 
     // temporaryly set namespace while we are building the implementation
     u64 last_namespace_we_are_in = cap_context.namespace_we_are_in;
@@ -1058,30 +1431,27 @@ Expression sem_function_call(Function* function, Expression* parameters, u64 par
         implementation->parameters[i] = var;
     }
 
-    Type* func_return_type = &function->function_type.function.return_types[0];
-
-    Type* return_types = cap_alloc(function->function_type.function.return_types_count * sizeof(Type));
-    for (u64 i = 0; i < function->function_type.function.return_types_count; i++) {
-        Type* return_type = &function->function_type.function.return_types[i];
+    for (u64 i = 0; i < return_types_count; i++) {
+        Type* return_type = &return_types[i];
         Type return_type_new = sem_type_new_allocator_ids(return_type);
         return_types[i] = return_type_new;
     }
     implementation->return_types = return_types;
-    implementation->return_types_count = function->function_type.function.return_types_count;
+    implementation->return_types_count = return_types_count;
 
     Ast* function_ast = function->ast;
     massert(function_ast->kind == ast_function_declaration, str("expected function declaration"));
     Ast* body_ast = function_ast->function_declaration.body;
     massert(body_ast->kind == ast_function_scope, str("expected function body to be a scope"));
 
-    ptr_append(function->implementations, function->implementations_count, function->implementations_capacity, implementation);
+    ptr_append(function->internal.implementations, function->internal.implementations_count, function->internal.implementations_capacity, implementation);
 
     cap_context.namespace_we_are_in = last_namespace_we_are_in;
     cap_context.scope = last_scope;
     cap_context.function_being_built = last_function_being_built;
 
     Expression function_call_expr = {0};
-    function_call_expr.kind = expression_function_call;
+    function_call_expr.kind = expression_function_call_internal;
 
     Type* expr_return_types = cap_alloc(implementation->return_types_count * sizeof(Type));
     for (u64 i = 0; i < implementation->return_types_count; i++) {
@@ -1096,9 +1466,9 @@ Expression sem_function_call(Function* function, Expression* parameters, u64 par
     }
 
     function_call_expr.ast = ast;
-    function_call_expr.function_call.parameters = parameters;
-    function_call_expr.function_call.parameter_count = parameter_count;
-    function_call_expr.function_call.implementation = implementation;
+    function_call_expr.internal_call.parameters = parameters;
+    function_call_expr.internal_call.parameter_count = parameter_count;
+    function_call_expr.internal_call.implementation = implementation;
 
     Expression passthrough_expr = sem_passthrough(&function_call_expr);
     Expression* function_call_expr_ptr = passthrough_expr.passthrough.expr;
@@ -1113,13 +1483,14 @@ void sem_complete_expression(Expression* expression) {
             sem_complete_expression(expression->passthrough.expr);
             return;
         }
-        case expression_function_call: {
-            Function_Implementation* call_implementation = expression->function_call.implementation;
+        case expression_function_call_internal: {
+            Function_Implementation* call_implementation = expression->internal_call.implementation;
             if (!call_implementation->is_complete) {
                 // try to see if a already made implementation works for this so we don't have to make a new one
                 Function* function = call_implementation->function;
-                for (u64 i = 0; i < function->implementations_count; i++) {
-                    Function_Implementation* implementation = function->implementations[i];
+                massert(function->kind == function_internal, str("expected function to be internal"));
+                for (u64 i = 0; i < function->internal.implementations_count; i++) {
+                    Function_Implementation* implementation = function->internal.implementations[i];
                     if (implementation->is_complete) {
                         bool is_match = true;
                         for (u64 j = 0; j < implementation->parameter_count; j++) {
@@ -1131,7 +1502,7 @@ void sem_complete_expression(Expression* expression) {
                                 is_match = false;
                                 break;
                             }
-                            if (parameter->know_compile_time_value) {
+                            if (parameter->compile_time_value) {
                                 void* call_parameter_value = sem_evaluate_expression(call_parameter->initial_value);
                                 void* parameter_value = parameter->compile_time_value;
                                 if (!sem_comile_time_value_is_equal(parameter_type, call_parameter_value, parameter_value)) {
@@ -1141,7 +1512,7 @@ void sem_complete_expression(Expression* expression) {
                             }
                         }
                         if (is_match) {
-                            expression->function_call.implementation = implementation;
+                            expression->internal_call.implementation = implementation;
                             call_implementation = implementation;
                             break;
                         }
@@ -1162,14 +1533,14 @@ void sem_complete_expression(Expression* expression) {
 
 void sem_complete_implementation(Function_Implementation* implementation) {
     if (implementation->is_complete) return;
-    implementation->is_complete = true;
+    u64 error_count_start = cap_context.error_count;
 
     cap_context.implementation_to_complete_recursion_counter++;
-    u64 max_recursion_depth = 256;
+    u64 max_recursion_depth = 128;
     if (cap_context.implementation_to_complete_recursion_counter > max_recursion_depth) {
         Function* function = implementation->function;
         Ast* ast = function->ast;
-        log_error_ast(ast, "hit max compile time function implementation recursion depth %llu", max_recursion_depth);
+        log_error_ast(ast, "can't compile function hit max compile time function implementation recursion depth %llu", max_recursion_depth);
         return;
     }
 
@@ -1191,60 +1562,7 @@ void sem_complete_implementation(Function_Implementation* implementation) {
     cap_context.namespace_we_are_in = last_namespace_we_are_in;
 
     cap_context.implementation_to_complete_recursion_counter--;
-}
-
-Function_Implementation* sem_prototype_implementation(Function* function, Expression* parameters, u64 parameter_count) {
-    Function_Implementation* implementation = cap_alloc(sizeof(Function_Implementation));
-    implementation->function = function;
-    implementation->parameter_count = parameter_count;
-    implementation->parameters = cap_alloc(parameter_count * sizeof(Variable*));
-    implementation->body.parent = cap_context.scope;
-
-    // temporaryly set namespace while we are building the implementation
-    u64 last_namespace_we_are_in = cap_context.namespace_we_are_in;
-    Scope* last_scope = cap_context.scope;
-    Function_Implementation* last_function_being_built = cap_context.function_being_built;
-    cap_context.function_being_built = implementation;
-    cap_context.namespace_we_are_in = function->namespace_id;
-    cap_context.scope = &implementation->body;
-
-    for (u64 i = 0; i < parameter_count; i++) {
-        Expression* parameter_expression = &parameters[i];
-        Type* parameter_type = &parameter_expression->type;
-        Ast* function_ast = function->ast;
-        massert(function_ast->kind == ast_function_declaration, str("expected function declaration"));
-        Ast* parameter_ast = &function_ast->function_declaration.parameters[i];
-        String parameter_name = parameter_ast->function_declaration_parameters.name;
-        Type var_type = sem_type_new_allocator_ids(parameter_type);
-        Variable* var = sem_add_variable(parameter_name, var_type, parameter_ast);
-        implementation->parameters[i] = var;
-    }
-
-    Type* func_return_type = &function->function_type.function.return_types[0];
-
-    Type* return_types = cap_alloc(function->function_type.function.return_types_count * sizeof(Type));
-    for (u64 i = 0; i < function->function_type.function.return_types_count; i++) {
-        Type* return_type = &function->function_type.function.return_types[i];
-        Type return_type_new = sem_type_new_allocator_ids(return_type);
-        return_types[i] = return_type_new;
-    }
-    implementation->return_types = return_types;
-    implementation->return_types_count = function->function_type.function.return_types_count;
-
-    Ast* function_ast = function->ast;
-    massert(function_ast->kind == ast_function_declaration, str("expected function declaration"));
-    Ast* body_ast = function_ast->function_declaration.body;
-    massert(body_ast->kind == ast_function_scope, str("expected function body to be a scope"));
-
-    sem_scope_parse_statements(body_ast, &implementation->body);
-
-    ptr_append(function->implementations, function->implementations_count, function->implementations_capacity, implementation);
-
-    cap_context.namespace_we_are_in = last_namespace_we_are_in;
-    cap_context.scope = last_scope;
-    cap_context.function_being_built = last_function_being_built;
-
-    return implementation;
+    implementation->is_complete = cap_context.error_count == error_count_start;
 }
 
 void sem_scope_parse_statements(Ast* ast, Scope* scope) {
@@ -1292,7 +1610,7 @@ bool sem_assign_expression(Expression* assignee, Expression* value, Ast* ast) {
         if (assignee->kind == expression_variable) {
             Variable* variable = assignee->variable.variable;
             variable->lost_constant_at_ast = ast;
-            variable->know_compile_time_value = false;
+            variable->compile_time_value = NULL;
         }
         Type assignee_type = sem_type_dereference(&assignee->type);
         *value = sem_implicit_cast(value, &assignee_type);
@@ -1401,18 +1719,20 @@ Statement sem_statement_function_declaration(Ast* ast) {
     statement.kind = statement_function_declaration;
     statement.ast = ast;
     Function function = sem_function_parse(ast);
-    if (function.function_type.kind == type_invalid) return (Statement){0};
+    if (function.kind == function_invalid) return (Statement){0};
 
-    Variable* var = sem_add_variable(ast->function_declaration.name, function.function_type, ast);
-    if (var == NULL) return (Statement){0};
-    var->initial_value = NULL;
-    Function* function_ptr = cap_alloc(sizeof(Function));
-    *function_ptr = function;
-    Function** function_ptr_ptr = cap_alloc(sizeof(Function*));
-    *function_ptr_ptr = function_ptr;
-    sem_set_variable_compile_time_value(var, function_ptr_ptr);
+    String name = ast->function_declaration.name;
+    Function* ptr;
+    if (string_equal(name, str("alloc"))) {
+        // var = sem_add_alloc_variable(name, function.function_type, ast, function_ptr);
+        massert(false, str("not implemented"));
+        return (Statement){0};
+    } else {
+        ptr = sem_add_function(&function);
+    }
+    if (ptr == NULL) return (Statement){0};
 
-    statement.function_declaration.variable = var;
+    statement.function_declaration.function = ptr;
     return statement;
 }
 
@@ -1463,15 +1783,15 @@ Statement sem_statement_parse(Ast* ast) {
     }
 }
 
-void __sem_find_functions_with_name_and_namespace(String name, String* namespaces, u64 namespaces_count, Variable*** out_variables, u64* out_capacity,
+void __sem_find_functions_with_name_and_namespace(String name, String* namespaces, u64 namespaces_count, Function*** out_variables, u64* out_capacity,
                                                   u64* out_count, Scope* scope) {
     u64 variables_count = *out_count;
     u64 variables_capacity = *out_capacity;
-    Variable** variables = *out_variables;
-    for (u64 i = 0; i < scope->variables_count; i++) {
-        Variable* variable = scope->variables[i];
-        if (variable->type.kind != type_function) continue;
-        if (string_equal(variable->name, name) && sem_variable_fits_namespace(variable, namespaces, namespaces_count)) {
+    Function** variables = *out_variables;
+    for (u64 i = 0; i < scope->function_variables_count; i++) {
+        Function* variable = scope->function_variables[i];
+        u64 function_namespace = variable->namespace_id;
+        if (string_equal(variable->name, name) && sem_namespace_fits_namespace(function_namespace, namespaces, namespaces_count)) {
             ptr_append(variables, variables_count, variables_capacity, variable);
         };
     }
@@ -1483,11 +1803,11 @@ void __sem_find_functions_with_name_and_namespace(String name, String* namespace
     }
 }
 
-Variable** sem_find_functions_with_name_and_namespace(String name, String* namespaces, u64 namespaces_count, u64* out_count) {
+Function** sem_find_functions_with_name_and_namespace(String name, String* namespaces, u64 namespaces_count, u64* out_count) {
     Scope* scope = cap_context.scope;
     u64 variables_capacity = 0;
     u64 variables_count = 0;
-    Variable** variables = NULL;
+    Function** variables = NULL;
     __sem_find_functions_with_name_and_namespace(name, namespaces, namespaces_count, &variables, &variables_capacity, &variables_count, scope);
     *out_count = variables_count;
     return variables;
@@ -1523,10 +1843,13 @@ Expression sem_expression_variable_parse(Ast* ast) {
     Variable* variable = sem_find_variable(name, namespaces, namespaces_count, ast);
     if (variable == NULL) return (Expression){0};
     expr.variable.variable = variable;
+
     Type expr_type = variable->type;
     expr_type = sem_type_reference(&expr_type, ast);
     if (expr_type.kind == type_invalid) return (Expression){0};
-    // TODO: set allocator to stack
+    Allocator_Id id = expr_type.allocator_id;
+    sem_set_id_allocator(id, &cap_context.stack_allocator);
+
     expr.type = expr_type;
     expr.ast = ast;
     return expr;
@@ -1537,14 +1860,18 @@ Expression sem_get_value_if(Expression* expr) {
     return sem_dereference(expr);
 }
 
-Expression sem_expression_int_parse(Ast* ast) {
-    massert(ast->kind == ast_int, str("expected ast_int"));
+Expression sem_int_expression(i64 value, Ast* ast) {
     Expression expr = {0};
     expr.kind = expression_int;
-    expr.int_value.value = ast->int_value.value;
+    expr.int_value.value = value;
     expr.type = sem_type_int_literal();
     expr.ast = ast;
     return expr;
+}
+
+Expression sem_expression_int_parse(Ast* ast) {
+    massert(ast->kind == ast_int, str("expected ast_int"));
+    return sem_int_expression(ast->int_value.value, ast);
 }
 
 Expression sem_expression_float_parse(Ast* ast) {
@@ -1623,8 +1950,29 @@ Expression sem_bitwise_and(Ast* ast) {
     return (Expression){0};
 }
 
-Expression sem_expression_function_call_parse(Ast* ast) {
+Expression sem_expression_alloc(Ast* ast) {
     massert(ast->kind == ast_function_call, str("expected ast_function_call"));
+
+    Expression alloc = {0};
+    alloc.kind = expression_alloc;
+    alloc.ast = ast;
+
+    Ast* function_name_ast = ast->function_call.function_variable;
+    massert(function_name_ast->kind == ast_variable, str("expected ast_variable"));
+    String function_name = function_name_ast->variable.name;
+    String* namespaces = function_name_ast->variable.namespaces;
+    u64 namespaces_count = function_name_ast->variable.namespaces_count;
+
+    if (!string_equal(function_name, str("alloc"))) {
+        log_error_ast(function_name_ast, "expected alloc");
+        return (Expression){0};
+    }
+
+    if (namespaces_count != 0) {
+        log_error_ast(function_name_ast, "expected no namespaces");
+        return (Expression){0};
+    }
+
     Ast* parameters_ast = ast->function_call.parameters;
     u64 parameter_count = ast->function_call.parameters_count;
 
@@ -1636,21 +1984,151 @@ Expression sem_expression_function_call_parse(Ast* ast) {
         parameters[i] = parameter;
     }
 
+    if (parameter_count > 2) {
+        log_error_ast(ast, "alloc should follow this call type: alloc(type type_allocate, u64 count)");
+        return (Expression){0};
+    }
+
+    Expression parameter_1 = parameters[0];
+    if (parameter_1.type.kind == type_type) {
+        Type** parameter_type_ptr = sem_evaluate_expression(&parameter_1);
+        if (parameter_type_ptr == NULL) return (Expression){0};
+        Type* parameter_type = *parameter_type_ptr;
+        alloc.alloc.type_to_allocate = *parameter_type;
+        Type type_ptr = sem_type_pointer(parameter_type, ast);
+        alloc.type = type_ptr;
+        if (parameter_count == 2) {
+            Expression* parameter_2 = &parameters[1];
+            Type u64_type = sem_uint_type(64);
+            Expression cast_p2 = sem_implicit_cast(parameter_2, &u64_type);
+            if (cast_p2.kind == expression_invalid) return (Expression){0};
+            alloc.alloc.count = cap_alloc(sizeof(Expression));
+            *alloc.alloc.count = cast_p2;
+        } else {
+            Expression int_expr = sem_int_expression(1, ast);
+            if (int_expr.kind == expression_invalid) return (Expression){0};
+            Type u64_type = sem_uint_type(64);
+            int_expr = sem_implicit_cast(&int_expr, &u64_type);
+            if (int_expr.kind == expression_invalid) return (Expression){0};
+            alloc.alloc.count = cap_alloc(sizeof(Expression));
+            *alloc.alloc.count = int_expr;
+        }
+    } else {
+        Ast* parameter_ast = &parameters_ast[0];
+        log_error_ast(ast, "expected first parameter to be a type");
+        return (Expression){0};
+    }
+    return alloc;
+}
+
+Expression _sem_expression_int_uint_type(Ast* ast, bool is_uint) {
+    massert(ast->kind == ast_function_call, str("expected ast_function_call"));
+    Expression expr = {0};
+    expr.kind = is_uint ? expression_uint_type : expression_int_type;
+    expr.type = sem_type_type();
+    expr.ast = ast;
+
     Ast* function_name_ast = ast->function_call.function_variable;
     massert(function_name_ast->kind == ast_variable, str("expected ast_variable"));
     String function_name = function_name_ast->variable.name;
     String* namespaces = function_name_ast->variable.namespaces;
     u64 namespaces_count = function_name_ast->variable.namespaces_count;
 
-    Type* parameters_types = cap_alloc(parameter_count * sizeof(Type));
-    for (u64 i = 0; i < parameter_count; i++) {
-        Type* parameter_type = &parameters_types[i];
-        parameters_types[i] = parameters[i].type;
+    if (namespaces_count != 0) {
+        log_error_ast(ast, "expected no namespaces when calling int_type");
+        return (Expression){0};
+    }
+    massert(string_equal(function_name, str("int_type")), str("expected int_type"));
+
+    if (ast->function_call.parameters_count != 1) {
+        log_error_ast(ast, "expected 1 parameter to int_type");
+        return (Expression){0};
     }
 
-    Function* function = sem_find_function(function_name, namespaces, namespaces_count, parameters_types, parameter_count, ast);
+    Ast* parameter_ast = &ast->function_call.parameters[0];
+    Expression parameter = sem_expression_parse(parameter_ast);
+    parameter = sem_get_value_if(&parameter);
+    if (parameter.kind == expression_invalid) return (Expression){0};
+    switch (parameter.type.kind) {
+        case type_int_literal: {
+            void* value = sem_evaluate_expression(&parameter);
+            if (value == NULL) return (Expression){0};
+            i64 bits = *(i64*)value;
+            expr.int_type.bits = bits;
+            break;
+        }
+        case type_int: {
+            Type i64_type = sem_int_type(64);
+            parameter = sem_cast_without_allocator(&parameter, &i64_type);
+            void* value = sem_evaluate_expression(&parameter);
+            if (value == NULL) return (Expression){0};
+            i64 bits = *(i64*)value;
+            expr.int_type.bits = bits;
+            break;
+        }
+        case type_uint: {
+            Type i64_type = sem_int_type(64);
+            parameter = sem_cast_without_allocator(&parameter, &i64_type);
+            void* value = sem_evaluate_expression(&parameter);
+            if (value == NULL) return (Expression){0};
+            i64 bits = *(i64*)value;
+            expr.int_type.bits = bits;
+            break;
+        }
+        default: {
+            log_error_ast(ast, "expected int, uint, or int_literal as parameter to int_type");
+            return (Expression){0};
+        }
+    }
+    expr.int_type.expr = cap_alloc(sizeof(Expression));
+    *expr.int_type.expr = parameter;
+    return expr;
+}
+
+Expression sem_expression_int_type(Ast* ast) {
+    return _sem_expression_int_uint_type(ast, false);
+}
+
+Expression sem_expression_uint_type(Ast* ast) {
+    return _sem_expression_int_uint_type(ast, true);
+}
+
+Expression sem_expression_function_call_parse(Ast* ast) {
+    massert(ast->kind == ast_function_call, str("expected ast_function_call"));
+
+    Ast* function_name_ast = ast->function_call.function_variable;
+    massert(function_name_ast->kind == ast_variable, str("expected ast_variable"));
+    String function_name = function_name_ast->variable.name;
+    String* namespaces = function_name_ast->variable.namespaces;
+    u64 namespaces_count = function_name_ast->variable.namespaces_count;
+
+    if (string_equal(function_name, str("int_type"))) {
+        return sem_expression_int_type(ast);
+    }
+    if (string_equal(function_name, str("uint_type"))) {
+        return sem_expression_uint_type(ast);
+    }
+
+    if (string_equal(function_name, str("alloc"))) {
+        return sem_expression_alloc(ast);
+    }
+
+    Ast* parameters_ast = ast->function_call.parameters;
+    u64 parameter_count = ast->function_call.parameters_count;
+
+    Expression* parameters = cap_alloc(parameter_count * sizeof(Expression));
+    for (u64 i = 0; i < parameter_count; i++) {
+        Ast* parameter_ast = &parameters_ast[i];
+        Expression parameter = sem_expression_parse(parameter_ast);
+        if (parameter.kind == expression_invalid) return (Expression){0};
+        parameters[i] = parameter;
+    }
+
+    Type* return_types = NULL;
+    u64 return_types_count = 0;
+    Function* function = sem_find_function(function_name, namespaces, namespaces_count, &parameters, &parameter_count, &return_types, &return_types_count, ast);
     if (function == NULL) return (Expression){0};
-    return sem_function_call(function, parameters, parameter_count, ast);
+    return sem_function_call(function, parameters, return_types, return_types_count, parameter_count, ast);
 }
 
 Expression sem_expression_struct_parse(Ast* ast) {
@@ -1880,7 +2358,7 @@ Expression sem_reference(Expression* expr) {
     if (expr->kind == expression_variable) {
         Variable* var = expr->variable.variable;
         var->lost_constant_at_ast = expr->ast;
-        var->know_compile_time_value = false;
+        var->compile_time_value = NULL;
     }
     Type underlying_type = sem_type_underlying_type(&expr->type);
     ref.type = sem_type_pointer(&underlying_type, expr->ast);
@@ -1893,24 +2371,16 @@ bool sem_can_implicit_cast(Expression* expr, Type* type) {
     if (type->kind != type_reference && expr->type.kind == type_reference) {
         expr_type = sem_type_dereference(&expr_type);
     }
-    if (sem_type_equal(&expr_type, type, false, false)) return true;
-    if (expr_type.kind == type_int && type->kind == type_int) {
-        u64 expr_bits = expr_type.int_.bits;
-        u64 type_bits = type->int_.bits;
-        if (expr_bits <= type_bits) return true;
-        else return false;
-    }
-    if (expr_type.kind == type_uint && type->kind == type_uint) {
-        u64 expr_bits = expr_type.uint.bits;
-        u64 type_bits = type->uint.bits;
-        if (expr_bits <= type_bits) return true;
-        else return false;
-    }
-    if (expr_type.kind == type_float && type->kind == type_float) return true;
+    if (sem_type_equal(&expr_type, type, false, true)) return true;
     if (expr_type.kind == type_int_literal && type->kind == type_int) return true;
     if (expr_type.kind == type_int_literal && type->kind == type_uint) return true;
     if (expr_type.kind == type_int_literal && type->kind == type_float) return true;
     if (expr_type.kind == type_float_literal && type->kind == type_float) return true;
+    if (expr_type.kind == type_pointer && type->kind == type_pointer) {
+        Type underlying_type_a = sem_type_underlying_type(&expr_type);
+        Type underlying_type_b = sem_type_underlying_type(type);
+        if (underlying_type_a.kind == type_void || underlying_type_b.kind == type_void) return true;
+    }
     return false;
 }
 
@@ -1932,12 +2402,12 @@ Expression _sem_cast(Expression* expr_in, Type* type, bool connect_allocator) {
         Type tt = *type;
         while (et.kind == type_pointer && tt.kind == type_pointer) {
             // TODO: checks to make sure this is valid
-            sem_connect_allocator_ids(et.pointer.underlying_type->allocator_id, tt.pointer.underlying_type->allocator_id);
+            sem_connect_allocator_ids(et.pointer.underlying_type->allocator_id, tt.pointer.underlying_type->allocator_id, expr_in->ast);
             et = sem_type_underlying_type(&et);
             tt = sem_type_underlying_type(&tt);
         }
         massert(et.kind != type_pointer && tt.kind != type_pointer, str("expected no pointers"));
-        sem_connect_allocator_ids(et.allocator_id, tt.allocator_id);
+        sem_connect_allocator_ids(et.allocator_id, tt.allocator_id, expr_in->ast);
     }
 
     cast.type = *type;
@@ -2004,8 +2474,16 @@ Program sem_program_parse(Ast* ast) {
     Program program = {0};
     program.name = ast->program.name;
     Type return_type = sem_int_type(32);
-    Type function_type = sem_function_type(&return_type, 1, NULL, 0, NO_ALLOCATOR_ID);
-    Function function = sem_create_function(function_type, NULL, ast);
+    Type* return_type_ptr = cap_alloc(sizeof(Type));
+    *return_type_ptr = return_type;
+    Type** return_type_ptr_ptr = cap_alloc(sizeof(Type*));
+    *return_type_ptr_ptr = return_type_ptr;
+    Expression return_type_expr = sem_compile_time_value_expression(return_type_ptr_ptr, sem_type_type(), ast);
+    Expression* return_type_expr_ptr = cap_alloc(sizeof(Expression));
+    *return_type_expr_ptr = return_type_expr;
+    String name = ast->program.name;
+    Scope* parse_scope = cap_alloc(sizeof(Scope));
+    Function function = sem_create_function_internal(name, ast);
     program.function = function;
 
     Function_Implementation* implmentation = cap_alloc(sizeof(Function_Implementation));
@@ -2016,7 +2494,8 @@ Program sem_program_parse(Ast* ast) {
     implmentation->return_types_count = 1;
     implmentation->return_types = cap_alloc(sizeof(Type) * implmentation->return_types_count);
     implmentation->return_types[0] = sem_int_type(32);
-    ptr_append(function.implementations, function.implementations_count, function.implementations_capacity, implmentation);
+    implmentation->lost_compile_time_evaluatable_at = NULL;
+    ptr_append(function.internal.implementations, function.internal.implementations_count, function.internal.implementations_capacity, implmentation);
 
     Scope* last_scope = cap_context.scope;
     Function_Implementation* last_function_being_built = cap_context.function_being_built;

@@ -1,5 +1,7 @@
 #include "cap.h"
 
+#include "cap/semantics.h"
+
 Cap_Context cap_context;
 
 Cap_Project cap_create_project(String path) {
@@ -254,30 +256,49 @@ void cap_init_context(String path) {
     *type_ptr = type;
     sem_set_variable_compile_time_value(type_var, type_ptr);
 
-    for (u64 i = 0; i < 256; i++) {
-        String number_str = string_int(i);
+    type = cap_alloc(sizeof(Type));
+    *type = sem_float_type(32);
+    Variable* float_var = sem_add_variable(str("f32"), sem_type_type(), NULL);
+    type_ptr = cap_alloc(sizeof(Type*));
+    *type_ptr = type;
+    sem_set_variable_compile_time_value(float_var, type_ptr);
 
-        type = cap_alloc(sizeof(Type));
-        *type = sem_int_type(i);
-        Variable* int_var = sem_add_variable(string_append(str("i"), number_str), sem_type_type(), NULL);
-        type_ptr = cap_alloc(sizeof(Type*));
-        *type_ptr = type;
-        sem_set_variable_compile_time_value(int_var, type_ptr);
+    type = cap_alloc(sizeof(Type));
+    *type = sem_float_type(64);
+    Variable* double_var = sem_add_variable(str("f64"), sem_type_type(), NULL);
+    type_ptr = cap_alloc(sizeof(Type*));
+    *type_ptr = type;
+    sem_set_variable_compile_time_value(double_var, type_ptr);
 
-        type = cap_alloc(sizeof(Type));
-        *type = sem_float_type(i);
-        Variable* float_var = sem_add_variable(string_append(str("f"), number_str), sem_type_type(), NULL);
-        type_ptr = cap_alloc(sizeof(Type*));
-        *type_ptr = type;
-        sem_set_variable_compile_time_value(float_var, type_ptr);
+    type = cap_alloc(sizeof(Type));
+    *type = sem_type_struct(NULL, 0, NULL, 0);
+    Variable* stack_allocator_type_var = sem_add_variable(str("Stack_Allocator"), sem_type_type(), NULL);
+    type_ptr = cap_alloc(sizeof(Type*));
+    *type_ptr = type;
+    sem_set_variable_compile_time_value(stack_allocator_type_var, type_ptr);
 
-        type = cap_alloc(sizeof(Type));
-        *type = sem_uint_type(i);
-        Variable* uint_var = sem_add_variable(string_append(str("u"), number_str), sem_type_type(), NULL);
-        type_ptr = cap_alloc(sizeof(Type*));
-        *type_ptr = type;
-        sem_set_variable_compile_time_value(uint_var, type_ptr);
-    }
+    Type* stack_allocator_type = *(Type**)stack_allocator_type_var->compile_time_value;
+
+    Variable* stack_allocator_var = sem_add_variable(str("stack"), *stack_allocator_type, NULL);
+    sem_set_variable_compile_time_value(stack_allocator_var, NULL);
+    Allocator stack_allocator = {0};
+    stack_allocator.variable = stack_allocator_var;
+    cap_context.stack_allocator = stack_allocator;
+
+    type = cap_alloc(sizeof(Type));
+    *type = sem_type_struct(NULL, 0, NULL, 0);
+    Variable* malloc_allocator_type_var = sem_add_variable(str("Malloc_Allocator"), sem_type_type(), NULL);
+    type_ptr = cap_alloc(sizeof(Type*));
+    *type_ptr = type;
+    sem_set_variable_compile_time_value(malloc_allocator_type_var, type_ptr);
+
+    Type* malloc_allocator_type = *(Type**)malloc_allocator_type_var->compile_time_value;
+
+    Variable* malloc_allocator_var = sem_add_variable(str("malloc"), *malloc_allocator_type, NULL);
+    sem_set_variable_compile_time_value(malloc_allocator_var, NULL);
+    Allocator default_allocator = {0};
+    default_allocator.variable = malloc_allocator_var;
+    cap_context.malloc_allocator = default_allocator;
 
     if (path.data[path.length - 1] == '/' || path.data[path.length - 1] == '\\') {
         cap_context.build_directory = string_append(path, str("build/"));

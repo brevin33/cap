@@ -2,7 +2,9 @@
 
 void log_errorv(const char* message, va_list args) {
     if (!cap_context.log) return;
+    if (cap_context.error_count >= MAX_ERROR_COUNT) log_exit();
     cap_context.error_count++;
+
     printf("\x1b[31m");
     printf("Error: ");
     vprintf(message, args);
@@ -19,6 +21,7 @@ void log_error(const char* message, ...) {
 
 void log_error_substring(String substring, const char* message, ...) {
     if (!cap_context.log) return;
+    if (cap_context.error_count >= MAX_ERROR_COUNT) log_exit();
     cap_context.error_count++;
     printf("\x1b[31m");
     va_list args;
@@ -33,6 +36,7 @@ void log_error_substring(String substring, const char* message, ...) {
 
 void log_error_token(Cap_File* file, Token token, const char* message, ...) {
     if (!cap_context.log) return;
+    if (cap_context.error_count >= MAX_ERROR_COUNT) log_exit();
     cap_context.error_count++;
     printf("\x1b[31m");
     if (cap_context.error_count > 16) mabort(str("Too many errors"));
@@ -51,14 +55,15 @@ void log_error_token(Cap_File* file, Token token, const char* message, ...) {
 }
 
 void log_error_ast(Ast* ast, const char* message, ...) {
-    if (ast == NULL) {
+    if (!cap_context.log) return;
+    if (cap_context.error_count >= MAX_ERROR_COUNT) log_exit();
+    if (ast == NULL || ast->file == NULL) {
         va_list args;
         va_start(args, message);
         log_errorv(message, args);
         va_end(args);
         return;
     }
-    if (!cap_context.log) return;
     cap_context.error_count++;
     printf("\x1b[31m");
 
@@ -121,7 +126,7 @@ void log_warning_token(Cap_File* file, Token token, const char* message, ...) {
 }
 
 void log_warning_ast(Ast* ast, const char* message, ...) {
-    if (ast == NULL) {
+    if (ast == NULL || ast->file == NULL) {
         va_list args;
         va_start(args, message);
         log_warningv(message, args);
@@ -189,7 +194,7 @@ void log_info_token(Cap_File* file, Token token, const char* message, ...) {
 }
 
 void log_info_ast(Ast* ast, const char* message, ...) {
-    if (ast == NULL) {
+    if (ast == NULL || ast->file == NULL) {
         va_list args;
         va_start(args, message);
         log_infov(message, args);
@@ -256,7 +261,7 @@ void log_success_token(Cap_File* file, Token token, const char* message, ...) {
 }
 
 void log_success_ast(Ast* ast, const char* message, ...) {
-    if (ast == NULL) {
+    if (ast == NULL || ast->file == NULL) {
         va_list args;
         va_start(args, message);
         log_successv(message, args);
@@ -334,7 +339,14 @@ void _log_chunk(const char* message, va_list args, Cap_File* file, String substr
         if (endline_in_substring) printf("^^");
         printf("\n");
         walk++;
+        line++;
     }
+}
+
+void log_exit() {
+    printf("exiting because to many errors\n");
+    debug_break();
+    exit(0);
 }
 
 void rainbow_printf(const char* format, ...) {

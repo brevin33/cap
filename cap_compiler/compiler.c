@@ -23,5 +23,6 @@ i32 main(int argc, char** argv, char** envp) {
     double cpu_time = ((double)(end - start)) / CLOCKS_PER_SEC;
     printf("CPU time: %f seconds\n", cpu_time);
 
+    debug_break();
     return 0;
 }

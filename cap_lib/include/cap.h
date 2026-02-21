@@ -56,6 +56,9 @@ struct Cap_Context {
     Cap_LLVM_Context llvm_info;
 
     bool is_in_semantic_analysis;
+
+    Allocator stack_allocator;
+    Allocator malloc_allocator;
 };
 
 struct Cap_File {

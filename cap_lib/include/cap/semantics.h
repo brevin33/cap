@@ -21,6 +21,9 @@ typedef struct Type_Struct Type_Struct;
 
 typedef struct Program Program;
 typedef struct Function Function;
+typedef struct Function_Internal Function_Internal;
+typedef struct Function_External Function_External;
+typedef struct Function_Intrinsic Function_Intrinsic;
 typedef struct Function_Implementation Function_Implementation;
 typedef struct Scope Scope;
 typedef struct Variable Variable;
@@ -33,6 +36,7 @@ typedef struct Statement_Assignment_Multiple_Values Statement_Assignment_Multipl
 typedef struct Statement_Function_Declaration Statement_Function_Declaration;
 
 typedef struct Expression Expression;
+typedef struct Expression_Compile_Time_Value Expression_Compile_Time_Value;
 typedef struct Expression_Int Expression_Int;
 typedef struct Expression_Float Expression_Float;
 typedef struct Expression_Variable Expression_Variable;
@@ -40,11 +44,14 @@ typedef struct Expression_Variable_Declaration Expression_Variable_Declaration;
 typedef struct Expression_Dereference Expression_Dereference;
 typedef struct Expression_Cast Expression_Cast;
 typedef struct Expression_Reference Expression_Reference;
-typedef struct Expression_Function_Call Expression_Function_Call;
+typedef struct Expression_Internal_Call Expression_Internal_Call;
+typedef struct Expression_External_Call Expression_External_Call;
 typedef struct Expression_Multiple_Values_Access Expression_Multiple_Values_Access;
 typedef struct Expression_Passthrough Expression_Passthrough;
 typedef struct Expression_Struct Expression_Struct;
 typedef struct Expression_Struct_Field_Access Expression_Struct_Field_Access;
+typedef struct Expression_Alloc Expression_Alloc;
+typedef struct Expression_Int_Type Expression_Int_Type;
 
 typedef struct Allocator Allocator;
 typedef struct Allocator_Map Allocator_Map;
@@ -63,7 +70,6 @@ typedef enum Type_Kind {
     type_reference,
     type_void,
     type_type,
-    type_function,
     type_int_literal,
     type_float_literal,
     type_multiple_value,
@@ -101,13 +107,6 @@ struct Type_Uint {
     i64 bits;
 };
 
-struct Type_Function {
-    Type* return_types;
-    u64 return_types_count;
-    Type* parameter_types;
-    u64 parameter_types_count;
-};
-
 typedef enum Type_Origin_Kind {
     type_intrisic_origin = 0,
     type_call_origin,
@@ -140,13 +139,11 @@ struct Type {
         Type_Int int_;
         Type_Float float_;
         Type_Uint uint;
-        Type_Function function;
         Type_Multiple_Value multiple_value;
         Type_Struct struct_;
     };
 };
 
-#define NO_ALLOCATOR_ID UINT64_MAX
 struct Allocator {
     Variable* variable;
 };
@@ -157,18 +154,39 @@ struct Allocator_Map {
     u64 allocator_capacity;
 };
 
-struct Function {
-    Ast* ast;
+typedef enum Function_Kind {
+    function_invalid = 0,
+    function_internal,
+    function_external,
+    function_intrinsic,
+} Function_Kind;
 
-    Type function_type;
-    String* parameter_names;
-
+struct Function_Internal {
     Function_Implementation** implementations;
     u32 implementations_count;
     u32 implementations_capacity;
+};
 
+struct Function_External {
+    String* parameter_names;
+    Type* parameter_types;
+    u64 parameter_count;
+    Type return_type;
+};
+
+struct Function_Intrinsic {};
+
+struct Function {
+    Ast* ast;
+    Function_Kind kind;
+    String name;
     Scope* scope_created_in;
     u64 namespace_id;
+    union {
+        Function_Internal internal;
+        Function_External external;
+        Function_Intrinsic intrinsic;
+    };
 };
 
 typedef enum Expression_Kind {
@@ -180,18 +198,31 @@ typedef enum Expression_Kind {
     expression_dereference,
     expression_cast,
     expression_reference,
-    expression_function_call,
+    expression_function_call_internal,
+    expression_function_call_external,
     expression_multiple_values_access,
     expression_passthrough,
     expression_struct,
     expression_struct_field_access,
-    // expression_alloc,
+    expression_alloc,
+    expression_compile_time_value,
+    expression_int_type,
+    expression_uint_type,
 } Expression_Kind;
 
-// struct Expression_Alloc {
-//     Type* type_to_allocate;
-//     u64 count;
-// };
+struct Expression_Int_Type {
+    Expression* expr;
+    i64 bits;
+};
+
+struct Expression_Compile_Time_Value {
+    void* value;
+};
+
+struct Expression_Alloc {
+    Type type_to_allocate;
+    Expression* count;
+};
 
 struct Expression_Struct_Field_Access {
     Expression* struct_value;
@@ -237,10 +268,22 @@ struct Expression_Reference {
     Expression* expr;
 };
 
-struct Expression_Function_Call {
+struct Expression_Intrinsic_Call {
+    Expression* parameters;
+    u64 parameter_count;
+    Function* function;
+};
+
+struct Expression_Internal_Call {
     Expression* parameters;
     u64 parameter_count;
     Function_Implementation* implementation;
+};
+
+struct Expression_External_Call {
+    Expression* parameters;
+    u64 parameter_count;
+    Function* function;
 };
 
 struct Expression_Struct {
@@ -253,6 +296,7 @@ struct Expression {
     Expression_Kind kind;
     Type type;
     Ast* ast;
+    void* value;
     union {
         Expression_Int int_value;
         Expression_Float float_value;
@@ -261,11 +305,15 @@ struct Expression {
         Expression_Dereference dereference;
         Expression_Cast cast;
         Expression_Reference reference;
-        Expression_Function_Call function_call;
+        Expression_Internal_Call internal_call;
+        Expression_External_Call external_call;
         Expression_Multiple_Values_Access multiple_values_access;
         Expression_Passthrough passthrough;
         Expression_Struct struct_;
         Expression_Struct_Field_Access struct_field_access;
+        Expression_Alloc alloc;
+        Expression_Compile_Time_Value compile_time_value;
+        Expression_Int_Type int_type;
     };
 };
 
@@ -302,7 +350,7 @@ struct Statement_Return {
 };
 
 struct Statement_Function_Declaration {
-    Variable* variable;
+    Function* function;
 };
 
 struct Statement {
@@ -322,6 +370,14 @@ struct Scope {
     u32 variables_count;
     u32 variables_capacity;
 
+    Function** function_variables;
+    u32 function_variables_count;
+    u32 function_variables_capacity;
+
+    Function** alloc_function_variables;
+    u32 alloc_function_variables_count;
+    u32 alloc_function_variables_capacity;
+
     Statement* statements;
     u32 statements_count;
     u32 statements_capacity;
@@ -335,7 +391,6 @@ struct Variable {
     Ast* ast;
     u64 namespace;
     Expression* initial_value;
-    bool know_compile_time_value;
     void* compile_time_value;
     Ast* lost_constant_at_ast;  // null mean it is constant
 };
@@ -347,6 +402,7 @@ struct Function_Implementation {
     Type* return_types;
     u64 return_types_count;
     bool is_complete;
+    Ast* lost_compile_time_evaluatable_at;
     Scope body;
 };
 
@@ -365,7 +421,6 @@ Type sem_type_type();
 Type sem_int_type(i64 bits);
 Type sem_uint_type(i64 bits);
 Type sem_float_type(i64 bits);
-Type sem_function_type(Type* return_types, u64 return_types_count, Type* parameter_types, u64 parameter_types_count, Allocator_Id allocator_id);
 Type sem_type_reference(Type* underlying_type, Ast* ast_for_error);
 Type sem_type_pointer(Type* underlying_type, Ast* ast_for_error);
 Type sem_type_struct(String* field_names, u64 field_names_count, Type** field_types, u64 field_types_count);
@@ -378,22 +433,35 @@ Type sem_type_dereference(Type* type);
 Type sem_type_underlying_type(Type* type);
 Type sem_type_new_allocator_ids(Type* type);
 
+bool sem_type_is_valid_external_type(Type* type);
 bool sem_type_is_reference_of(Type* type, Type* underlying_type);
 bool sem_type_is_ptr_to(Type* type, Type* underlying_type);
 
 String sem_type_to_string(Type* type);
-Function sem_create_function(Type function_type, String* parameter_names, Ast* ast);
+
+Function sem_create_function_internal(String name, Ast* ast);
+
+Function sem_create_function_external(String name, Ast* ast);
+
 Variable* sem_find_variable(String name, String* namespaces, u64 namespaces_count, Ast* ast_for_error);
 Variable* sem_add_variable(String name, Type type, Ast* ast);
-Variable** sem_find_functions_with_name_and_namespace(String name, String* namespaces, u64 namespaces_count, u64* out_count);
-Expression sem_function_call(Function* function, Expression* parameters, u64 parameter_count, Ast* ast);
+Function* sem_add_function(Function* function);
+
+Function** sem_find_functions_with_name_and_namespace(String name, String* namespaces, u64 namespaces_count, u64* out_count);
+Expression sem_function_call_external(Function* function, Expression* parameters, Type* return_types, u64 return_types_count, u64 parameter_count, Ast* ast);
+Expression sem_function_call_intrinsic(Function* function, Expression* parameters, Type* return_types, u64 return_types_count, u64 parameter_count, Ast* ast);
+Expression sem_function_call_internal(Function* function, Expression* parameters, Type* return_types, u64 return_types_count, u64 parameter_count, Ast* ast);
+Expression sem_function_call(Function* function, Expression* parameters, Type* return_types, u64 return_types_count, u64 parameter_count, Ast* ast);
+Expression sem_compile_time_value_expression(void* value, Type type, Ast* ast);
 Expression sem_multiple_values_access(Expression* multiple_values_value, u64 index, Ast* ast);
-Function* sem_find_function(String name, String* namespaces, u64 namespaces_count, Type* types, u64 types_count, Ast* ast);
+Function* sem_find_function(String name, String* namespaces, u64 namespaces_count, Expression** parameters_exprs_in_out, u64* parameter_count_in_out,
+                            Type** return_types_out, u64* return_types_count_out, Ast* ast);
 Expression sem_expression_parse_with_variable_declaration(Ast* ast);
 Expression sem_expression_variable_parse(Ast* ast);
 Expression sem_expression_parse(Ast* ast);
 Expression sem_expression_nil_biop_parse(Ast* ast);
 Expression sem_expression_int_parse(Ast* ast);
+Expression sem_int_expression(i64 value, Ast* ast);
 Expression sem_expression_float_parse(Ast* ast);
 Expression sem_expression_struct_parse(Ast* ast);
 
@@ -411,7 +479,7 @@ bool sem_type_equal(Type* type_a, Type* type_b, bool check_allocator, bool check
 
 Allocator_Id sem_get_new_allocator_id();
 void sem_set_id_allocator(Allocator_Id id, Allocator* allocator);
-void sem_connect_allocator_ids(Allocator_Id id1, Allocator_Id id2);
+void sem_connect_allocator_ids(Allocator_Id id1, Allocator_Id id2, Ast* ast_for_error);
 Allocator* sem_get_allocator(Allocator_Id id);
 
 void sem_scope_parse_statements(Ast* ast, Scope* scope);
@@ -423,13 +491,13 @@ Statement sem_statement_function_declaration(Ast* ast);
 
 void sem_set_variable_compile_time_value(Variable* var, void* value);
 
-Function_Implementation* sem_prototype_implementation(Function* function, Expression* parameters, u64 parameter_count);
 void sem_complete_implementation(Function_Implementation* implementation);
 void sem_complete_expression(Expression* expression);
 
 void* sem_evaluate_expression(Expression* expression);
 bool sem_comile_time_value_is_equal(Type* type, void* value_a, void* value_b);
 
+bool sem_namespace_fits_namespace(u64 namespace, String* namespaces, u64 namespaces_count);
 bool sem_variable_fits_namespace(Variable* variable, String* namespaces, u64 namespaces_count);
-
+//
 bool sem_assign_expression(Expression* assignee, Expression* value, Ast* ast);
