@@ -1,0 +1,580 @@
+#pragma once
+
+#include "ast.h"
+#include "util/util.h"
+
+typedef struct SSA SSA;
+
+typedef struct SSA_Stack_Alloc SSA_Stack_Alloc;
+typedef struct SSA_Store SSA_Store;
+typedef struct SSA_Multi_Value SSA_Multi_Value;
+typedef struct SSA_Parameter SSA_Parameter;
+typedef struct SSA_Argument SSA_Argument;
+typedef struct SSA_Function_Declaration SSA_Function_Declaration;
+typedef struct SSA_Int_Literal SSA_Int_Literal;
+typedef struct SSA_Float_Literal SSA_Float_Literal;
+typedef struct SSA_Return SSA_Return;
+typedef struct SSA_Load SSA_Load;
+typedef struct SSA_Explicit_Cast SSA_Explicit_Cast;
+typedef struct SSA_Implicit_Cast SSA_Implicit_Cast;
+typedef struct SSA_Index_Multi_Value SSA_Index_Multi_Value;
+typedef struct SSA_Index_Multi_Type SSA_Index_Multi_Type;
+typedef struct SSA_Int_Type SSA_Int_Type;
+typedef struct SSA_Uint_Type SSA_Uint_Type;
+typedef struct SSA_Float_Type SSA_Float_Type;
+typedef struct SSA_Build SSA_Build;
+typedef struct SSA_Call_Setup SSA_Call_Setup;
+typedef struct SSA_Call SSA_Call;
+typedef struct SSA_Call_Return_Type SSA_Call_Return_Type;
+typedef struct SSA_Pointer_Type SSA_Pointer_Type;
+typedef struct SSA_Underlying_Type SSA_Underlying_Type;
+typedef struct SSA_Multi_Type SSA_Multi_Type;
+typedef struct SSA_Argument_Type SSA_Argument_Type;
+typedef struct SSA_Parameter_Type SSA_Parameter_Type;
+typedef struct SSA_Evaluation_Context SSA_Evaluation_Context;
+typedef struct SSA_Default_Value SSA_Default_Value;
+
+typedef union SSA_Data SSA_Data;
+typedef struct SSA_Compile_Time_Value SSA_Compile_Time_Value;
+typedef struct SSA_Has_Been_Type_Checked SSA_Has_Been_Type_Checked;
+typedef struct SSA_Possible_Values SSA_Possible_Values;
+typedef struct SSA_Possible_Providence_Values SSA_Possible_Providence_Values;
+typedef struct SSA_Possible_Providence_Value SSA_Possible_Providence_Value;
+
+typedef struct SSA_Block_Location SSA_Block_Location;
+typedef struct SSA_Block SSA_Block;
+typedef union SSA_Block_Data SSA_Block_Data;
+
+typedef struct SSA_Block_Function_Setup SSA_Block_Function_Setup;
+typedef struct SSA_Block_Function SSA_Block_Function;
+
+typedef struct SSA_List SSA_List;
+
+typedef struct Function Function;
+
+typedef struct Function_Internal Function_Internal;
+typedef struct Function_Intrinsic Function_Intrinsic;
+
+typedef union Function_Data Function_Data;
+
+typedef struct Type Type;
+typedef union Type_Data Type_Data;
+
+typedef struct Type_Int Type_Int;
+typedef struct Type_Uint Type_Uint;
+typedef struct Type_Float Type_Float;
+typedef struct Type_Ptr Type_Ptr;
+typedef struct Type_Multi Type_Multi;
+
+typedef struct Function_Context Function_Context;
+
+typedef struct Pointer_Providence Pointer_Providence;
+
+typedef struct SSA_Interpreter_Context SSA_Interpreter_Context;
+typedef struct SSA_Interpreter_Pointer_Value_Map SSA_Interpreter_Pointer_Value_Map;
+
+typedef struct Log Log;
+
+typedef enum Type_Kind {
+    Type_Kind_Invalid = 0,
+    Type_Kind_Type,
+    Type_Kind_Int,
+    Type_Kind_Int_Literal,
+    Type_Kind_Uint,
+    Type_Kind_Float,
+    Type_Kind_Float_Literal,
+    Type_Kind_Void,
+    Type_Kind_Function,
+    Type_Kind_Ptr,
+    Type_Kind_Multi,
+    Type_Kind_Call_Setup,
+} Type_Kind;
+
+struct Type_Int {
+    u32 bits;
+};
+
+struct Type_Uint {
+    u32 bits;
+};
+
+struct Type_Float {
+    u32 bits;
+};
+
+struct Type_Ptr {
+    Type* type;
+};
+
+struct Type_Multi {
+    Type** types;
+    u32 types_count;
+};
+
+union Type_Data {
+    Type_Int int_;
+    Type_Uint uint;
+    Type_Float float_;
+    Type_Ptr ptr;
+    Type_Multi multi;
+};
+
+struct Type {
+    Type_Kind kind;
+    Type_Data data;
+};
+
+struct Pointer_Providence {
+    u64 providence;
+};
+
+struct SSA_List {
+    SSA* statements;
+    u32 statements_count;
+    u32 statements_capacity;
+};
+
+typedef enum SSA_Block_Kind {
+    SSA_Block_Kind_Invalid = 0,
+    SSA_Block_Kind_Global,
+    SSA_Block_Kind_Function_Setup,
+    SSA_Block_Kind_Function,
+    SSA_Block_Kind_Scope,
+} SSA_Block_Kind;
+
+struct SSA_Block_Function_Setup {};
+
+struct SSA_Block_Function {};
+
+union SSA_Block_Data {
+    SSA_Block_Function_Setup function_setup;
+    SSA_Block_Function function;
+};
+
+struct SSA_Block_Location {
+    u32 list_index;
+    u32 statement_index;
+};
+
+struct SSA_Block {
+    SSA_List* statement_lists;
+    u32 statement_lists_count;
+    u32 statement_lists_capacity;
+
+    SSA_Block** branchs_to_this_block;
+    u32 branchs_to_this_block_count;
+    u32 branchs_to_this_block_capacity;
+
+    SSA_Block_Kind kind;
+    SSA_Block_Data data;
+};
+
+typedef enum Function_Kind {
+    Function_Kind_Invalid = 0,
+    Function_Kind_Internal,
+    Function_Kind_Intrinsic,
+} Function_Kind;
+
+struct Function_Internal {
+    SSA_Block body;
+};
+
+typedef enum Intrinsic_Function_Kind {
+    Intrinsic_Function_Kind_Invalid = 0,
+    Intrinsic_Function_Int_Type,
+    Intrinsic_Function_Uint_Type,
+    Intrinsic_Function_Float_Type,
+    Intrinsic_Function_Kind_Compile_To_LLVM_IR,
+} Intrinsic_Function_Kind;
+
+struct Function_Intrinsic {
+    Intrinsic_Function_Kind kind;
+};
+
+union Function_Data {
+    Function_Internal internal;
+    Function_Intrinsic intrinsic;
+};
+
+struct Function {
+    utf8 name;
+    SSA_Block setup_block;
+    SSA* return_type;
+    SSA** parameter_types;
+    SSA** parameters;
+    u32 parameter_types_count;
+    Function_Kind kind;
+    Function_Data data;
+};
+
+typedef enum SSA_Kind {
+    SSA_Kind_Invalid = 0,
+    SSA_Kind_Store,
+    SSA_Kind_Load,
+    SSA_Kind_Stack_Alloc,
+    SSA_Kind_Function_Type,
+    SSA_Kind_Type_Type,
+    SSA_Kind_Function_Declaration,
+    SSA_Kind_Multi_Value,
+    SSA_Kind_Multi_Type,
+    SSA_Kind_Index_Multi_Value,
+    SSA_Kind_Index_Multi_Type,
+    SSA_Kind_Parameter,
+    SSA_Kind_Parameter_Type,
+    SSA_Kind_Argument,
+    SSA_Kind_Argument_Type,
+    SSA_Kind_Int_Literal_Type,
+    SSA_Kind_Int_Literal,
+    SSA_Kind_Float_Literal_Type,
+    SSA_Kind_Float_Literal,
+    SSA_Kind_Return,
+    SSA_Kind_Return_Type,
+    SSA_Kind_Implicit_Cast,
+    SSA_Kind_Explicit_Cast,
+    SSA_Kind_Int_Type,
+    SSA_Kind_Uint_Type,
+    SSA_Kind_Float_Type,
+    SSA_Kind_Void_Type,
+    SSA_Kind_Compile_To_LLVM_IR,
+    SSA_Kind_Build,
+    SSA_Kind_Call_Setup,
+    SSA_Kind_Call_Setup_Type,
+    SSA_Kind_Call,
+    SSA_Kind_Call_Return_Type,
+    SSA_Kind_Pointer_Type,
+    SSA_Kind_Underlying_Type,
+    SSA_Kind_Default_Value,
+} SSA_Kind;
+
+struct SSA_Int_Literal {
+    Big_Int value;
+};
+
+struct SSA_Float_Literal {
+    f64 value;
+};
+
+struct SSA_Stack_Alloc {
+    SSA* type;
+};
+
+struct SSA_Store {
+    SSA* value;
+    SSA* address;
+};
+
+struct SSA_Load {
+    SSA* address;
+};
+
+struct SSA_Multi_Value {
+    SSA** values;
+    u32 values_count;
+};
+
+struct SSA_Index_Multi_Value {
+    SSA* multi_value;
+    u32 index;
+};
+
+struct SSA_Index_Multi_Type {
+    SSA* multi_type;
+    u32 index;
+};
+
+struct SSA_Function_Declaration {
+    Function function;
+};
+
+struct SSA_Parameter {
+    u32 index;
+};
+
+struct SSA_Parameter_Type {
+    u32 index;
+};
+
+struct SSA_Argument {
+    u32 index;
+};
+
+struct SSA_Argument_Type {
+    u32 index;
+};
+
+struct SSA_Return {
+    SSA* return_value;
+};
+
+struct SSA_Explicit_Cast {
+    SSA* value;
+    SSA* type;
+};
+
+struct SSA_Implicit_Cast {
+    SSA* value;
+    SSA* type;
+};
+
+struct SSA_Build {
+    SSA_Block block;
+};
+
+struct SSA_Call_Setup {
+    SSA* callee;
+    SSA** arguments;
+    u32 arguments_count;
+};
+
+struct SSA_Call {
+    SSA* setup;
+};
+
+struct SSA_Call_Return_Type {
+    SSA* setup;
+};
+
+struct SSA_Pointer_Type {
+    SSA* type;
+};
+
+struct SSA_Underlying_Type {
+    SSA* type;
+};
+
+struct SSA_Multi_Type {
+    SSA** types;
+    u32 types_count;
+};
+
+struct SSA_Default_Value {
+    SSA* type;
+};
+
+union SSA_Data {
+    SSA_Stack_Alloc stack_alloc;
+    SSA_Store store;
+    SSA_Multi_Value multi_value;
+    SSA_Function_Declaration function_declaration;
+    SSA_Parameter parameter;
+    SSA_Argument argument;
+    SSA_Int_Literal int_literal;
+    SSA_Float_Literal float_literal;
+    SSA_Return return_;
+    SSA_Load load;
+    SSA_Explicit_Cast explicit_cast;
+    SSA_Implicit_Cast implicit_cast;
+    SSA_Index_Multi_Value index_multi_value;
+    SSA_Build build;
+    SSA_Call_Setup call_setup;
+    SSA_Call call;
+    SSA_Call_Return_Type call_return_type;
+    SSA_Pointer_Type pointer_type;
+    SSA_Underlying_Type underlying_type;
+    SSA_Multi_Type multi_type;
+    SSA_Argument_Type argument_type;
+    SSA_Parameter_Type parameter_type;
+    SSA_Index_Multi_Type index_multi_type;
+    SSA_Default_Value default_value;
+};
+
+struct SSA_Interpreter_Pointer_Value_Map {
+    Pointer_Providence providence;
+    u64 value_size;
+    u8* value_memory;
+};
+
+struct SSA_Interpreter_Context {
+    SSA_Interpreter_Pointer_Value_Map* value_map;
+    u32 value_map_count;
+    u32 value_map_capacity;
+};
+
+struct SSA_Evaluation_Context {
+    Function_Context** function_context_stack;
+    u32 function_context_stack_count;
+    u32 function_context_stack_capacity;
+};
+
+struct SSA_Possible_Providence_Value {
+    void* value;
+    u8* bytes_filled;
+};
+
+struct SSA_Possible_Providence_Values {
+    SSA_Possible_Providence_Value* values;
+    u32 values_count;
+    u32 values_capacity;
+};
+
+#define SSA_SUCCESS_VOID_VALUE ((void*)1)
+struct SSA_Possible_Values {
+    void** values;
+
+    u32 values_count;
+    u32 values_capacity;
+};
+
+struct SSA_Compile_Time_Value {
+    SSA_Possible_Values possible_values;
+
+    Log* log;
+    u32 log_count;
+    bool displayed_logs;
+
+    Function_Context* function_context;
+};
+
+struct SSA_Has_Been_Type_Checked {
+    bool type_check_result;
+
+    Log* log;
+    u32 log_count;
+    bool displayed_logs;
+
+    Function_Context* function_context;
+};
+
+struct SSA {
+    SSA_Kind kind;
+    SSA_Data data;
+    SSA_Block* block;
+    SSA* type;
+
+    SSA_Compile_Time_Value* compile_time_value;
+    u32 compile_time_value_count;
+    u32 compile_time_value_capacity;
+
+    SSA_Has_Been_Type_Checked* has_been_type_checked;
+    u32 has_been_type_checked_count;
+    u32 has_been_type_checked_capacity;
+
+    Ast* ast;
+};
+
+struct Function_Context {
+    utf8 name;
+    SSA* call;
+
+    SSA** arguments;
+    u32 arguments_count;
+
+    SSA** parameters;
+    u32 parameters_count;
+
+    SSA* return_type;
+};
+
+SSA* ssa_add_to_block(SSA ssa, SSA_Block* block);
+SSA* ssa_ast_to_ssa(Ast* ast, SSA_Block* block);
+bool ssa_type_check(SSA* ssa);
+bool ssa_type_check_speculative(SSA* ssa);
+bool ssa_type_check_block(SSA_Block* block);
+bool ssa_type_check_call(SSA* ssa);
+
+void* ssa_evaluate(SSA* ssa);
+SSA_Possible_Values ssa_general_evaluate(SSA* ssa);
+SSA_Possible_Values ssa_general_evaluate_speculative(SSA* ssa);
+Type* ssa_evaluate_type(SSA* ssa);
+Function* ssa_evaluate_function(SSA* ssa);
+
+SSA_Possible_Values ssa_evaluate_int_type_function(SSA* ssa, Function_Context* function_context, Function* function);
+SSA_Possible_Values ssa_evaluate_uint_type_function(SSA* ssa, Function_Context* function_context, Function* function);
+SSA_Possible_Values ssa_evaluate_float_type_function(SSA* ssa, Function_Context* function_context, Function* function);
+SSA_Possible_Values ssa_evaluate_compile_to_llvm_ir_function(SSA* ssa, Function_Context* function_context, Function* function);
+
+void* ssa_saved_value(SSA* ssa);
+void ssa_evaluate_remove_saved_value(SSA* ssa);
+
+SSA* ssa_top_level_ast_to_ssa(Ast* ast, SSA_Block* block);
+void ssa_top_level_post_parse(SSA* ssa, SSA_Block* block);
+
+void ssa_init_intrinsic_block();
+
+void ssa_build_scope(Ast* ast, SSA_Block* block);
+
+SSA* ssa_stack_alloc(SSA* type, SSA_Block* block, Ast* ast);
+SSA* ssa_store(SSA* value, SSA* address, SSA_Block* block, Ast* ast);
+SSA* ssa_load(SSA* address, SSA_Block* block, Ast* ast);
+SSA* ssa_multi_value(SSA** values, u32 values_count, SSA_Block* block, Ast* ast);
+SSA* ssa_parameter(u32 index, SSA_Block* block, Ast* ast);
+SSA* ssa_argument(u32 index, SSA_Block* block, Ast* ast);
+SSA* ssa_function_declaration(SSA_Block* block, Ast* ast);
+SSA* ssa_int_literal(Big_Int value, SSA_Block* block, Ast* ast);
+SSA* ssa_float_literal(f64 value, SSA_Block* block, Ast* ast);
+SSA* ssa_return(SSA* return_value, SSA_Block* block, Ast* ast);
+SSA* ssa_return_type(SSA_Block* block, Ast* ast);
+SSA* ssa_implicit_cast(SSA* value, SSA* type, SSA_Block* block, Ast* ast);
+SSA* ssa_explicit_cast(SSA* value, SSA* type, SSA_Block* block, Ast* ast);
+SSA* ssa_index_multi_value(SSA* multi_value, u32 index, SSA_Block* block, Ast* ast);
+SSA* ssa_index_multi_type(SSA* multi_type, u32 index, SSA_Block* block, Ast* ast);
+SSA* ssa_build(SSA_Block* block, Ast* ast);
+SSA* ssa_call_setup(SSA* callee, SSA** arguments, u32 arguments_count, SSA_Block* block, Ast* ast);
+SSA* ssa_call(SSA* setup, SSA_Block* block, Ast* ast);
+SSA* ssa_call_return_type(SSA* setup, SSA_Block* block, Ast* ast);
+SSA* ssa_pointer_type(SSA* type, SSA_Block* block, Ast* ast);
+SSA* ssa_underlying_type(SSA* type, SSA_Block* block, Ast* ast);
+SSA* ssa_multi_type(SSA** types, u32 types_count, SSA_Block* block, Ast* ast);
+SSA* ssa_argument_type(u32 index, SSA_Block* block, Ast* ast);
+SSA* ssa_parameter_type(u32 index, SSA_Block* block, Ast* ast);
+SSA* ssa_default_value(SSA* type, SSA_Block* block, Ast* ast);
+
+SSA* ssa_ast_intrinsic(Ast_Intrinsic intrinsic);
+
+SSA* ssa_function_type();
+SSA* ssa_type_type();
+SSA* ssa_int_literal_type();
+SSA* ssa_float_literal_type();
+SSA* ssa_void_type();
+SSA* ssa_int_type();
+SSA* ssa_uint_type();
+SSA* ssa_float_type();
+SSA* ssa_compile_to_llvm_ir();
+SSA* ssa_call_setup_type();
+
+SSA* ssa_function_declaration_ast_prototype(Ast* ast, SSA_Block* block);
+void ssa_function_declaration_ast_implement(SSA* ssa, SSA_Block* block);
+
+SSA* ssa_build_ast_prototype(Ast* ast, SSA_Block* block);
+void ssa_build_ast_implement(SSA* ssa, SSA_Block* block);
+
+utf8 ssa_block_to_string(SSA_Block* block);
+utf8 ssa_recursive_get_block_strings(SSA_Block* block);
+
+utf8 ssa_get_ssa_block_name(SSA_Block* block);
+utf8 ssa_get_ssa_name(SSA* ssa);
+
+utf8 ssa_kind_to_string(SSA_Kind kind);
+
+Function_Context* ssa_get_function_context();
+Function_Context* ssa_pop_function_context();
+void ssa_push_function_context(Function_Context* function_context);
+
+bool ssa_can_explicit_cast(Type* type, Type* cast_type);
+bool ssa_can_implicit_cast(Type* type, Type* cast_type);
+
+void* ssa_cast_value(void* value, Type* value_type, Type* cast_type);
+
+void* ssa_get_type_default_value(Type* type);
+bool ssa_type_equal(Type* type1, Type* type2);
+i64 ssa_type_size(Type* type);
+bool ssa_compile_time_value_equal(void* value1, void* value2, Type* type);
+
+void ssa_copy_evaluation_context_into_other_context(SSA_Evaluation_Context* evaluation_context, SSA_Evaluation_Context* other_evaluation_context);
+
+SSA_Block_Location ssa_get_location(SSA* ssa);
+
+SSA_Possible_Values ssa_possible_single_value(void* value);
+void ssa_possible_values_consolidate(SSA_Possible_Values* values, Type* type);
+void ssa_possible_providence_values_consolidate(SSA_Possible_Providence_Values* values, Type* type, i64 value_size);
+bool ssa_possible_providence_value_full(SSA_Possible_Providence_Value value, i64 value_size);
+SSA_Possible_Providence_Value ssa_copy_possible_providence_value(SSA_Possible_Providence_Value value, i64 value_size);
+bool ssa_in_providence_and_will_change(Pointer_Providence* base_providence, i64 base_value_size, Pointer_Providence* address_providence, i64 address_value_size,
+                                       SSA_Possible_Providence_Values* values);
+SSA_Possible_Providence_Value ssa_create_possible_providence_value(Pointer_Providence* base_providence, i64 base_value_size,
+                                                                   Pointer_Providence* address_providence, i64 address_value_size, void* value);
+
+bool ssa_has_been_type_checked(SSA* ssa, bool* type_check_result);
+bool ssa_has_been_evaluated(SSA* ssa, SSA_Possible_Values* out_possible_values);
+
+bool ssa_type_math_type(Type* type);

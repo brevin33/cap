@@ -1,0 +1,13 @@
+
+int_type(32) main(){
+    return 0 
+}
+
+
+
+build simple{
+    //compile_to_exe(main)
+    compile_to_llvm_ir(main)
+    //LLVM_IR ir = compile_to_llvm_ir(main)
+    //compile_llvm_ir_to_exe(ir)
+}
