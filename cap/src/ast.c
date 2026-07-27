@@ -61,7 +61,7 @@ Ast ast_parameter(Tokens* tokens, Cap_File* file) {
     ast.file = file;
     ast.kind = Ast_Kind_Parameter;
 
-    Ast type = ast_expression_without_biops(&tkns, file);
+    Ast type = ast_expression(&tkns, file);
     if (type.kind == Ast_Kind_Invalid) return (Ast){0};
 
     Token token = tokens_get(tkns);
@@ -89,7 +89,7 @@ Ast ast_function_declaration(Tokens* tokens, Cap_File* file) {
     u32 return_types_count = 0;
     u32 return_types_capacity = 0;
     while (true) {
-        Ast type = ast_expression_without_biops(&tkns, file);
+        Ast type = ast_expression(&tkns, file);
         if (type.kind == Ast_Kind_Invalid) return (Ast){0};
         ptr_append(return_types, return_types_count, return_types_capacity, type);
         Token token = tokens_get(tkns);
@@ -243,7 +243,7 @@ Ast ast_statement_starting_with_expression(Tokens* tokens, Cap_File* file) {
 
     Token token = tokens_get(tkns);
     while (true) {
-        Ast lhs = ast_expression_without_biops(&tkns, file);
+        Ast lhs = ast_expression(&tkns, file);
         if (lhs.kind == Ast_Kind_Invalid) return (Ast){0};
         token = tokens_get(tkns);
         if (token.kind == Token_Kind_Identifier) {
@@ -255,6 +255,44 @@ Ast ast_statement_starting_with_expression(Tokens* tokens, Cap_File* file) {
         token = tokens_get(tkns);
         if (token.kind != Token_Kind_Comma) break;
         tokens_next(&tkns);
+    }
+    token = tokens_get(tkns);
+    if (token.kind == Token_Kind_Assign) {
+        tokens_next(&tkns);
+        Ast* rhs_values = NULL;
+        u32 rhs_values_count = 0;
+        u32 rhs_values_capacity = 0;
+        while (true) {
+            Ast rhs = ast_expression(&tkns, file);
+            if (rhs.kind == Ast_Kind_Invalid) return (Ast){0};
+            ptr_append(rhs_values, rhs_values_count, rhs_values_capacity, rhs);
+            token = tokens_get(tkns);
+            if (token.kind != Token_Kind_Comma) break;
+            tokens_next(&tkns);
+        }
+        if (rhs_values_count != lhs_values_count && rhs_values_count != 1) {
+            log_msg_token("Expected exactly one or as many values on rhs as lhs when assigning", log_error, token, file);
+            return (Ast){0};
+        }
+        Ast assign = {0};
+        assign.kind = Ast_Kind_Assign;
+        assign.data.assign.lhs = lhs_values;
+        assign.data.assign.lhs_count = lhs_values_count;
+        assign.data.assign.rhs = rhs_values;
+        assign.data.assign.rhs_count = rhs_values_count;
+
+        Token* start = lhs_values[0].tokens.data;
+        Token* end = rhs_values[rhs_values_count - 1].tokens.data;
+        assign.tokens.data = start;
+        assign.tokens.count = end - start;
+
+        assign.file = file;
+        *tokens = tkns;
+        return assign;
+    }
+    if (lhs_values_count != 1) {
+        log_msg_token("Expected exactly one value on lhs when not assigning", log_error, token, file);
+        return (Ast){0};
     }
 
     // TODO: handel assignment and multiple values well
@@ -351,6 +389,8 @@ utf8 ast_kind_to_string(Ast_Kind kind) {
             return utf8_str("Ast_Kind_Build");
         case Ast_Kind_Intrinsic:
             return utf8_str("Ast_Kind_Intrinsic");
+        case Ast_Kind_Assign:
+            return utf8_str("Ast_Kind_Assign");
     }
 }
 
@@ -673,13 +713,6 @@ Ast ast_expression(Tokens* tokens, Cap_File* file) {
     return expr;
 }
 
-Ast ast_expression_without_biops(Tokens* tokens, Cap_File* file) {
-    Ast expr = _ast_expression(tokens, file, INT32_MIN);
-    if (expr.kind == Ast_Kind_Invalid) return (Ast){0};
-    // TODO: when adding multiplication take any multiplication and turn it into a dereference here
-    return expr;
-}
-
 Ast ast_create_from_file(Cap_File* file) {
     Ast ast = {0};
     ast.tokens = file->tokens;
@@ -875,6 +908,13 @@ bool ast_resolve_variables(Ast* ast, Scope* scope) {
         case Ast_Kind_Invalid: {
             log_msg_ast("Unexpected ast kind", log_error, ast);
             return false;
+        }
+        case Ast_Kind_Assign: {
+            Ast* lhs = ast->data.assign.lhs;
+            Ast* rhs = ast->data.assign.rhs;
+            if (!ast_resolve_variables(lhs, scope)) return false;
+            if (!ast_resolve_variables(rhs, scope)) return false;
+            return true;
         }
     }
 }

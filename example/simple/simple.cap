@@ -1,13 +1,18 @@
+type i8 = int_type(8)
+type i16 = int_type(16)
+type i32 = int_type(32)
+type i64 = int_type(64)
 
-int_type(32) main(){
-    return 0 
+i32 main(){
+    i32 a = 123
+    return a
 }
-
-
 
 build simple{
-    //compile_to_exe(main)
     compile_to_llvm_ir(main)
-    //LLVM_IR ir = compile_to_llvm_ir(main)
-    //compile_llvm_ir_to_exe(ir)
 }
+
+
+
+
+

@@ -64,10 +64,40 @@ u32 utf8_visual_len(utf8 str) {
     return length;
 }
 
-void utf8_append_with_capacity(utf8* base, u32 base_capacity, utf8 str) {
-    i64 amount_over_capacity = (str.count + base->count) - base_capacity;
-    if (amount_over_capacity < 0) amount_over_capacity = 0;
-    u32 copy_amount = str.count - amount_over_capacity;
-    memcpy(base->data + base->count, str.data, copy_amount);
-    base->count += copy_amount;
+utf8 utf8_slice(char* start, char* end) {
+    u32 len = end - start;
+    utf8 str = {0};
+    str.data = start;
+    str.count = len;
+    return str;
+}
+
+utf8 utf8_memory_as_hex(void* memory, u64 size) {
+    utf8 str = {0};
+    str.data = alloc(size * 2 + 3);
+    str.count = 2;
+    str.data[0] = '0';
+    str.data[1] = 'x';
+    for (i64 i = size - 1; i >= 0; i--) {
+        char* c = str.data + str.count;
+        sprintf(c, "%02x", *(u8*)(memory + i));
+        str.count += 2;
+    }
+    return str;
+}
+
+void utf8_append_with_capacity(utf8* base, u32* capacity, utf8 str) {
+    i64 amount_over_capacity = (str.count + base->count) - (*capacity);
+    if (amount_over_capacity >= 0) {
+        u32 capacity2 = *capacity * 2;
+        if (amount_over_capacity > capacity2) {
+            capacity2 = capacity2 + amount_over_capacity * 2;
+        }
+        char* new_memory = alloc(capacity2);
+        memcpy(new_memory, base->data, base->count);
+        base->data = new_memory;
+        *capacity = capacity2;
+    }
+    memcpy(base->data + base->count, str.data, str.count);
+    base->count += str.count;
 }

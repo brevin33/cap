@@ -2,34 +2,28 @@
 
 #include <math.h>
 
+#include "ast.h"
 #include "cap.h"
 #include "log.h"
 
 SSA* ssa_add_to_block(SSA ssa, SSA_Block* block) {
-    if (block == NULL) {
-        SSA* ssa_ptr = alloc(sizeof(SSA));
-        *ssa_ptr = ssa;
-        return ssa_ptr;
-    }
     ssa.block = block;
     if (block->statement_lists_count == 0) {
         SSA_List list = {0};
         list.statements_capacity = 8;
         list.statements = alloc(sizeof(SSA) * list.statements_capacity);
-        list.statements_count = 0;
         ptr_append(block->statement_lists, block->statement_lists_count, block->statement_lists_capacity, list);
     }
     SSA_List* list = block->statement_lists + block->statement_lists_count - 1;
     if (list->statements_count == list->statements_capacity) {
         SSA_List new_list = {0};
-        new_list.statements = alloc(sizeof(SSA) * list->statements_capacity * 2);
-        new_list.statements_count = 0;
+        new_list.statements_capacity = list->statements_capacity * 2;
+        new_list.statements = alloc(sizeof(SSA) * new_list.statements_capacity);
         ptr_append(block->statement_lists, block->statement_lists_count, block->statement_lists_capacity, new_list);
         list = block->statement_lists + block->statement_lists_count - 1;
     }
-    ptr_append(list->statements, list->statements_count, list->statements_capacity, ssa);
+    list->statements[list->statements_count++] = ssa;
     SSA* ssa_ptr = list->statements + list->statements_count - 1;
-    // log_msg_ssa("Added SSA to block", log_debug, ssa_ptr);
     return ssa_ptr;
 }
 
@@ -62,954 +56,49 @@ void ssa_top_level_post_parse(SSA* ssa, SSA_Block* block) {
     }
 }
 
-Function* ssa_evaluate_function(SSA* ssa) {
-    Type* type = ssa_evaluate_type(ssa->type);
-    if (type == NULL) return NULL;
-    if (type->kind != Type_Kind_Function) {
-        log_msg_ssa("Can't evaluate to function", log_error, ssa);
-        return NULL;
-    }
-    return ssa_evaluate(ssa);
-}
-
-Type* ssa_evaluate_type(SSA* ssa) {
-    if (ssa->kind == SSA_Kind_Type_Type) return context.intrinsic_ssa_block.type_type_value;
-    Type* type = ssa_evaluate_type(ssa->type);
-    if (type == NULL) return NULL;
-    if (type->kind != Type_Kind_Type) {
-        log_msg_ssa("Can't evaluate to type", log_error, ssa);
-        return NULL;
-    }
-    return ssa_evaluate(ssa);
-}
-
-SSA_Possible_Values ssa_evaluate_int_type_function(SSA* ssa, Function_Context* function_context, Function* function) {
-    SSA* p1 = function_context->parameters[0];
-    SSA* p1_type_ssa = function->parameter_types[0];
-    Type* p1_type = ssa_evaluate_type(p1_type_ssa);
-
-    void* p1_value = ssa_evaluate(p1);
-    if (p1_value == NULL) return (SSA_Possible_Values){0};
-
-    Type i64_type = {0};
-    i64_type.kind = Type_Kind_Int;
-    i64_type.data.int_.bits = 64;
-
-    i64* value_as_i64 = ssa_cast_value(p1_value, p1_type, &i64_type);
-
-    Type* int_type_type = alloc(sizeof(Type));
-    int_type_type->kind = Type_Kind_Int;
-    int_type_type->data.int_.bits = *value_as_i64;
-
-    return ssa_possible_single_value(int_type_type);
-}
-
-SSA_Possible_Values ssa_evaluate_uint_type_function(SSA* ssa, Function_Context* function_context, Function* function) {
-    assert(false);
-}
-
-SSA_Possible_Values ssa_evaluate_float_type_function(SSA* ssa, Function_Context* function_context, Function* function) {
-    assert(false);
-}
-
-SSA_Possible_Values ssa_evaluate_compile_to_llvm_ir_function(SSA* ssa, Function_Context* function_context, Function* function) {
-    SSA* p1 = function_context->parameters[0];
-    SSA_Block main_run_block = {0};
-    main_run_block.kind = SSA_Block_Kind_Scope;
-    SSA* main_function_setup = ssa_call_setup(p1, NULL, 0, &main_run_block, p1->ast);
-    if (ssa_type_check(main_function_setup) == false) return (SSA_Possible_Values){0};
-    SSA* main_function_call = ssa_call(main_function_setup, &main_run_block, p1->ast);
-    if (ssa_type_check(main_function_call) == false) return (SSA_Possible_Values){0};
-    assert(false);
-}
-
-static bool _ssa_figure_out_arguments(SSA** arguments, u32 arguments_count, SSA* argument_side, SSA_Evaluation_Context* argument_evaluation_context,
-                                      SSA* parameter_side, SSA_Evaluation_Context* parameter_evaluation_context, bool* out_changed) {
-    if (parameter_side->kind == SSA_Kind_Argument) {
-        u32 index = parameter_side->data.argument.index;
-        SSA* current_argument = arguments[index];
-        if (current_argument == NULL) {
-            arguments[index] = argument_side;
-            *out_changed = true;
-            return true;
-        }
-
-        context.ssa_evaluation_context = argument_evaluation_context;
-        Type* argument_side_type = ssa_evaluate_type(argument_side->type);
-        if (argument_side_type == NULL) return false;
-
-        context.ssa_evaluation_context = parameter_evaluation_context;
-        Type* current_argument_type = ssa_evaluate_type(current_argument->type);
-        if (current_argument_type == NULL) return false;
-
-        if (ssa_type_equal(argument_side_type, current_argument_type) == false) {
-            log_msg_ssa("Conflicting inferred argument types", log_error, argument_side);
-            return false;
-        }
-
-        context.ssa_evaluation_context = argument_evaluation_context;
-        void* argument_side_value = ssa_evaluate(argument_side);
-        if (argument_side_value == NULL) return false;
-
-        context.ssa_evaluation_context = parameter_evaluation_context;
-        void* current_argument_value = ssa_evaluate(current_argument);
-        if (current_argument_value == NULL) return false;
-
-        if (ssa_compile_time_value_equal(argument_side_value, current_argument_value, argument_side_type) == false) {
-            log_msg_ssa("Conflicting inferred argument values", log_error, argument_side);
-            return false;
-        }
-
-        return true;
-    }
-    // TODO: further type inference
-    return true;
-}
-
-static bool _ssa_find_value_at_providence(SSA_Block* block, SSA_Block_Location location, Pointer_Providence* providence, i64 value_size, Type* type,
-                                          SSA_Possible_Providence_Values* possible_values) {
-    if (providence == 0) return true;
-    bool first = true;
-    for (u32 i = location.list_index; i != UINT32_MAX; i--) {
-        SSA_List* list = block->statement_lists + i;
-        u32 start_index = first ? location.statement_index : list->statements_count - 1;
-        first = false;
-        for (u32 j = start_index; j != UINT32_MAX; j--) {
-            SSA* ssa = list->statements + j;
-            switch (ssa->kind) {
-                case SSA_Kind_Store: {
-                    SSA* address = ssa->data.store.address;
-                    SSA* stored = ssa->data.store.value;
-                    Type* address_type = ssa_evaluate_type(address->type);
-                    if (address_type == NULL) return false;
-                    if (address_type->kind != Type_Kind_Ptr) {
-                        log_msg_ssa("Found store into address not of type pointer", log_error, ssa);
-                        return false;
-                    }
-                    Type* stored_type = ssa_evaluate_type(stored->type);
-                    if (stored_type == NULL) return false;
-                    i64 stored_type_size = ssa_type_size(stored_type);
-
-                    SSA_Possible_Values address_possibilities = ssa_general_evaluate_speculative(address);
-                    if (address_possibilities.values_count == 0) {
-                        assert(false);
-                        // TODO: don't know what to do here think nothing but want to see when if the ever happens
-                    }
-                    SSA_Possible_Values stored_possibilities = ssa_general_evaluate_speculative(stored);
-
-                    SSA_Possible_Providence_Value* values = NULL;
-                    u32 values_count = 0;
-                    u32 values_capacity = 0;
-                    for (u32 i = 0; i < address_possibilities.values_count; i++) {
-                        if (ssa_in_providence_and_will_change(providence, value_size, address_possibilities.values[i], stored_type_size, possible_values) ==
-                            false)
-                            continue;
-
-                        // can't do anything about loading value that doesn't exist
-                        if (stored_possibilities.values_count == 0) {
-                            possible_values->values_count = 0;
-                            return true;
-                        }
-
-                        for (u32 j = 0; j < stored_possibilities.values_count; j++) {
-                            SSA_Possible_Providence_Value possible_value = ssa_create_possible_providence_value(
-                                providence, value_size, address_possibilities.values[i], stored_type_size, stored_possibilities.values[j]);
-                            if (possible_value.value == NULL) continue;
-
-                            for (u32 k = 0; k < possible_values->values_count; k++) {
-                                SSA_Possible_Providence_Value possible_value_copy = ssa_copy_possible_providence_value(possible_value, value_size);
-                                SSA_Possible_Providence_Value* current_value = possible_values->values + k;
-                                for (i64 l = 0; l < value_size; l++) {
-                                    if (current_value->bytes_filled[l] == 1) {
-                                        possible_value_copy.bytes_filled[l] = 1;
-                                        ((char*)possible_value_copy.value)[l] = ((char*)current_value->value)[l];
-                                    }
-                                }
-                                ptr_append(values, values_count, values_capacity, possible_value_copy);
-                            }
-                        }
-                    }
-
-                    if (values_count != 0) {
-                        possible_values->values_count = 0;
-                        for (u32 i = 0; i < values_count; i++) {
-                            SSA_Possible_Providence_Value value = values[i];
-                            ptr_append(possible_values->values, possible_values->values_count, possible_values->values_capacity, value);
-                        }
-                        ssa_possible_providence_values_consolidate(possible_values, type, value_size);
-                    }
-                    bool all_full = true;
-                    for (u32 i = 0; i < possible_values->values_count; i++) {
-                        SSA_Possible_Providence_Value value = possible_values->values[i];
-                        if (ssa_possible_providence_value_full(value, value_size) == false) {
-                            all_full = false;
-                        }
-                    }
-                    if (all_full) return true;
-                    break;
-                }
-                case SSA_Kind_Call: {
-                    assert(false);
-                    break;
-                }
-                default: {
-                    break;
-                }
-            }
-        }
-    }
-
-    SSA_Possible_Providence_Values* branch_values = NULL;
-    u32 branch_values_count = 0;
-    u32 branch_values_capacity = 0;
-
-    for (u32 i = 0; i < block->branchs_to_this_block_count; i++) {
-        SSA_Block* branch = block->branchs_to_this_block[i];
-
-        SSA_Possible_Providence_Values values = {0};
-        for (u32 j = 0; j < possible_values->values_count; j++) {
-            SSA_Possible_Providence_Value value = possible_values->values[j];
-            SSA_Possible_Providence_Value copy = ssa_copy_possible_providence_value(value, value_size);
-            ptr_append(values.values, values.values_count, values.values_capacity, copy);
-        }
-
-        SSA_Block_Location branch_end_location = {0};
-        branch_end_location.list_index = branch->statement_lists_count - 1;
-        SSA_List last_list = branch->statement_lists[branch_end_location.list_index];
-        branch_end_location.statement_index = last_list.statements_count - 1;
-        bool res = _ssa_find_value_at_providence(branch, branch_end_location, providence, value_size, type, &values);
-        ptr_append(branch_values, branch_values_count, branch_values_capacity, values);
-        if (res == false) return false;
-    }
-
-    if (block->kind == SSA_Block_Kind_Function || block->kind == SSA_Block_Kind_Function_Setup) {
-        Function_Context* function_context = ssa_pop_function_context();
-        SSA* call_ssa = function_context->call;
-        SSA_Block_Location call_location = ssa_get_location(call_ssa);
-        SSA_Block* call_block = call_ssa->block;
-
-        SSA_Possible_Providence_Values values = {0};
-        for (u32 j = 0; j < possible_values->values_count; j++) {
-            SSA_Possible_Providence_Value value = possible_values->values[j];
-            SSA_Possible_Providence_Value copy = ssa_copy_possible_providence_value(value, value_size);
-            ptr_append(values.values, values.values_count, values.values_capacity, copy);
-        }
-        bool res = _ssa_find_value_at_providence(call_block, call_location, providence, value_size, type, &values);
-        ptr_append(branch_values, branch_values_count, branch_values_capacity, values);
-
-        ssa_push_function_context(function_context);
-        if (res == false) return false;
-    }
-
-    possible_values->values_count = 0;
-    for (u32 i = 0; i < branch_values_count; i++) {
-        SSA_Possible_Providence_Values values = branch_values[i];
-        for (u32 j = 0; j < values.values_count; j++) {
-            SSA_Possible_Providence_Value value = values.values[j];
-            ptr_append(possible_values->values, possible_values->values_count, possible_values->values_capacity, value);
-        }
-    }
-
-    ssa_possible_providence_values_consolidate(possible_values, type, value_size);
-
-    return true;
-}
-
-static SSA_Possible_Values _ssa_general_evaluate(SSA* ssa) {
-    switch (ssa->kind) {
-        case SSA_Kind_Void_Type: {
-            return ssa_possible_single_value(context.intrinsic_ssa_block.void_type_value);
-        }
-        case SSA_Kind_Function_Type: {
-            return ssa_possible_single_value(context.intrinsic_ssa_block.function_type_value);
-        }
-        case SSA_Kind_Type_Type: {
-            return ssa_possible_single_value(context.intrinsic_ssa_block.type_type_value);
-        }
-        case SSA_Kind_Int_Literal_Type: {
-            return ssa_possible_single_value(context.intrinsic_ssa_block.int_literal_type_value);
-        }
-        case SSA_Kind_Float_Literal_Type: {
-            return ssa_possible_single_value(context.intrinsic_ssa_block.float_literal_type_value);
-        }
-        case SSA_Kind_Call_Setup_Type: {
-            return ssa_possible_single_value(context.intrinsic_ssa_block.call_setup_type_value);
-        }
-        case SSA_Kind_Int_Type: {
-            return ssa_possible_single_value(context.intrinsic_ssa_block.int_type_value);
-        }
-        case SSA_Kind_Uint_Type: {
-            return ssa_possible_single_value(context.intrinsic_ssa_block.uint_type_value);
-        }
-        case SSA_Kind_Float_Type: {
-            return ssa_possible_single_value(context.intrinsic_ssa_block.float_type_value);
-        }
-        case SSA_Kind_Compile_To_LLVM_IR: {
-            return ssa_possible_single_value(context.intrinsic_ssa_block.compile_to_llvm_ir_value);
-        }
-        case SSA_Kind_Pointer_Type: {
-            Type* underlying_type = ssa_evaluate_type(ssa->data.pointer_type.type);
-            if (underlying_type == NULL) return (SSA_Possible_Values){0};
-            Type* type = alloc(sizeof(Type));
-            type->kind = Type_Kind_Ptr;
-            type->data.ptr.type = underlying_type;
-
-            return ssa_possible_single_value(type);
-        }
-        case SSA_Kind_Underlying_Type: {
-            Type* ptr_type = ssa_evaluate_type(ssa->data.underlying_type.type);
-            if (ptr_type == NULL) return (SSA_Possible_Values){0};
-            if (ptr_type->kind != Type_Kind_Ptr) {
-                log_msg_ssa("Can only evaluate underlying type if type is a pointer", log_error, ssa);
-                return (SSA_Possible_Values){0};
-            }
-            return ssa_possible_single_value(ptr_type->data.ptr.type);
-        }
-        case SSA_Kind_Function_Declaration: {
-            Function* function = &ssa->data.function_declaration.function;
-            return ssa_possible_single_value(function);
-        }
-        case SSA_Kind_Int_Literal: {
-            Big_Int* value = &ssa->data.int_literal.value;
-            return ssa_possible_single_value(value);
-        }
-        case SSA_Kind_Float_Literal: {
-            f64* value = &ssa->data.float_literal.value;
-            return ssa_possible_single_value(value);
-        }
-        case SSA_Kind_Multi_Value: {
-            assert(false);
-            return (SSA_Possible_Values){0};
-        }
-        case SSA_Kind_Index_Multi_Value: {
-            assert(false);
-            return (SSA_Possible_Values){0};
-        }
-        case SSA_Kind_Index_Multi_Type: {
-            assert(false);
-            return (SSA_Possible_Values){0};
-        }
-        case SSA_Kind_Multi_Type: {
-            assert(false);
-            return (SSA_Possible_Values){0};
-        }
-        case SSA_Kind_Parameter: {
-            Function_Context* function_context = ssa_pop_function_context();
-            u32 index = ssa->data.parameter.index;
-            SSA* parameter = function_context->parameters[index];
-            SSA_Possible_Values value = ssa_general_evaluate(parameter);
-            ssa_push_function_context(function_context);
-            return value;
-        }
-        case SSA_Kind_Parameter_Type: {
-            Function_Context* function_context = ssa_pop_function_context();
-            u32 index = ssa->data.parameter_type.index;
-            SSA* parameter = function_context->parameters[index];
-            SSA_Possible_Values value = ssa_general_evaluate(parameter->type);
-            ssa_push_function_context(function_context);
-            return value;
-        }
-        case SSA_Kind_Call_Return_Type: {
-            SSA* call_setup = ssa->data.call_return_type.setup;
-            Function_Context* function_context = ssa_evaluate(call_setup);
-            if (function_context == NULL) return (SSA_Possible_Values){0};
-            ssa_push_function_context(function_context);
-            SSA* return_type = function_context->return_type;
-            SSA_Possible_Values value = ssa_general_evaluate(return_type);
-            ssa_pop_function_context();
-            return value;
-        }
-        case SSA_Kind_Argument: {
-            Function_Context* function_context = ssa_pop_function_context();
-            u32 index = ssa->data.argument.index;
-            SSA* argument = function_context->arguments[index];
-            SSA_Possible_Values value = ssa_general_evaluate(argument);
-            ssa_push_function_context(function_context);
-            return value;
-        }
-        case SSA_Kind_Argument_Type: {
-            Function_Context* function_context = ssa_pop_function_context();
-            u32 index = ssa->data.argument_type.index;
-            SSA* argument = function_context->arguments[index];
-            SSA_Possible_Values value = ssa_general_evaluate(argument->type);
-            ssa_push_function_context(function_context);
-            return value;
-        }
-        case SSA_Kind_Return_Type: {
-            Function_Context* function_context = ssa_pop_function_context();
-            SSA* return_type = function_context->return_type;
-            SSA_Possible_Values value = ssa_general_evaluate(return_type);
-            ssa_push_function_context(function_context);
-            return value;
-        }
-        case SSA_Kind_Explicit_Cast: {
-            SSA* value_ssa = ssa->data.explicit_cast.value;
-            SSA* type_ssa = ssa->data.explicit_cast.type;
-
-            Type* value_type = ssa_evaluate_type(value_ssa->type);
-            if (value_type == NULL) return (SSA_Possible_Values){0};
-            Type* type = ssa_evaluate_type(type_ssa);
-            if (type == NULL) return (SSA_Possible_Values){0};
-
-            void* value = ssa_evaluate(value_ssa);
-            if (value == NULL) return (SSA_Possible_Values){0};
-
-            void* casted_value = ssa_cast_value(value, value_type, type);
-            if (casted_value == NULL) return (SSA_Possible_Values){0};
-            return ssa_possible_single_value(casted_value);
-        }
-        case SSA_Kind_Implicit_Cast: {
-            SSA* value_ssa = ssa->data.implicit_cast.value;
-            SSA* type_ssa = ssa->data.implicit_cast.type;
-
-            Type* value_type = ssa_evaluate_type(value_ssa->type);
-            if (value_type == NULL) return (SSA_Possible_Values){0};
-            Type* type = ssa_evaluate_type(type_ssa);
-            if (type == NULL) return (SSA_Possible_Values){0};
-
-            void* value = ssa_evaluate(value_ssa);
-            if (value == NULL) return (SSA_Possible_Values){0};
-
-            void* casted_value = ssa_cast_value(value, value_type, type);
-            if (casted_value == NULL) return (SSA_Possible_Values){0};
-            return ssa_possible_single_value(casted_value);
-        }
-        case SSA_Kind_Call_Setup: {
-            Function_Context* function_context = alloc(sizeof(Function_Context));
-
-            SSA* callee_ssa = ssa->data.call_setup.callee;
-            Function* function = ssa_evaluate_function(callee_ssa);
-            if (function == NULL) return (SSA_Possible_Values){0};
-
-            u32 parameters_count = function->parameter_types_count;
-            SSA** arguments = alloc(sizeof(SSA*) * parameters_count);
-            for (u32 i = 0; i < ssa->data.call_setup.arguments_count; i++) {
-                SSA* argument = ssa->data.call_setup.arguments[i];
-                arguments[i] = argument;
-            }
-
-            SSA_Evaluation_Context* evaluation_context = context.ssa_evaluation_context;
-            SSA_Evaluation_Context other_evaluation_context = {0};
-            ssa_copy_evaluation_context_into_other_context(evaluation_context, &other_evaluation_context);
-
-            bool changed = true;
-            while (changed) {
-                changed = false;
-                for (u32 i = 0; i < parameters_count; i++) {
-                    SSA* argument = arguments[i];
-                    if (argument == NULL) continue;
-                    SSA* argument_type = argument->type;
-                    SSA* parameter_type = function->parameter_types[i];
-                    bool res = _ssa_figure_out_arguments(arguments, parameters_count, argument_type, evaluation_context, parameter_type,
-                                                         &other_evaluation_context, &changed);
-                    if (res == false) return (SSA_Possible_Values){0};
-                }
-            }
-
-            context.ssa_evaluation_context = evaluation_context;
-            for (u32 i = 0; i < parameters_count; i++) {
-                SSA* argument = arguments[i];
-                if (argument == NULL) {
-                    log_msg_ssa("Failed to figure out argument to call function", log_error, ssa);
-                    return (SSA_Possible_Values){0};
-                }
-            }
-            function_context->call = ssa;
-            function_context->name = function->name;
-            function_context->arguments = arguments;
-            function_context->arguments_count = parameters_count;
-            function_context->return_type = function->return_type;
-            function_context->parameters = function->parameters;
-            function_context->parameters_count = parameters_count;
-            ssa_push_function_context(function_context);
-
-            SSA_Block* setup_block = &function->setup_block;
-            bool res = ssa_type_check_block(setup_block);
-
-            for (u32 i = 0; i < function->parameter_types_count; i++) {
-                SSA* parameter_type = function->parameter_types[i];
-                Type* parameter_type_type = ssa_evaluate_type(parameter_type);
-                res = res && parameter_type_type != NULL;
-            }
-            SSA* return_type = function->return_type;
-            Type* return_type_type = ssa_evaluate_type(return_type);
-            res = res && return_type_type != NULL;
-            ssa_pop_function_context();
-
-            if (!res) {
-                log_msg_ssa("Failed to type check function parameter types", log_info, ssa);
-                return (SSA_Possible_Values){0};
-            }
-
-            return ssa_possible_single_value(function_context);
-        }
-        case SSA_Kind_Call: {
-            SSA* setup = ssa->data.call.setup;
-            SSA* callee = setup->data.call_setup.callee;
-            Function_Context* function_context = ssa_evaluate(setup);
-            Function* function = ssa_evaluate_function(callee);
-            if (function == NULL) return (SSA_Possible_Values){0};
-
-            ssa_push_function_context(function_context);
-            SSA_Possible_Values res_value = {0};
-            switch (function->kind) {
-                case Function_Kind_Invalid: {
-                    internal_compiler_error();
-                }
-                case Function_Kind_Internal: {
-                    assert(false);
-                }
-                case Function_Kind_Intrinsic: {
-                    Function_Intrinsic* function_intrinsic = &function->data.intrinsic;
-                    switch (function_intrinsic->kind) {
-                        case Intrinsic_Function_Kind_Invalid: {
-                            internal_compiler_error();
-                        }
-                        case Intrinsic_Function_Int_Type: {
-                            res_value = ssa_evaluate_int_type_function(function_context->parameters[0], function_context, function);
-                            break;
-                        }
-                        case Intrinsic_Function_Uint_Type: {
-                            res_value = ssa_evaluate_uint_type_function(function_context->parameters[0], function_context, function);
-                            break;
-                        }
-
-                        case Intrinsic_Function_Float_Type: {
-                            res_value = ssa_evaluate_float_type_function(function_context->parameters[0], function_context, function);
-                            break;
-                        }
-                        case Intrinsic_Function_Kind_Compile_To_LLVM_IR: {
-                            res_value = ssa_evaluate_compile_to_llvm_ir_function(function_context->parameters[0], function_context, function);
-                            break;
-                        }
-                    }
-                }
-            }
-            ssa_pop_function_context();
-            return res_value;
-        }
-        case SSA_Kind_Stack_Alloc: {
-            Type* type = ssa_evaluate_type(ssa->type);
-            if (type == NULL) return (SSA_Possible_Values){0};
-            assert(type->kind == Type_Kind_Ptr);
-            Pointer_Providence* providence = alloc(sizeof(Pointer_Providence));
-            i64 type_size = ssa_type_size(type);
-            providence->providence = context.pointer_providence_counter;
-            context.pointer_providence_counter += type_size + 1;
-            return ssa_possible_single_value(providence);
-        }
-        case SSA_Kind_Load: {
-            SSA_Block* block = ssa->block;
-            Type* type = ssa_evaluate_type(ssa->type);
-            if (type == NULL) return (SSA_Possible_Values){0};
-            i64 type_size = ssa_type_size(type);
-            SSA_Block_Location location = ssa_get_location(ssa);
-            SSA* address = ssa->data.load.address;
-            Type* address_type = ssa_evaluate_type(address->type);
-            if (address_type == NULL) return (SSA_Possible_Values){0};
-            if (address_type->kind != Type_Kind_Ptr) {
-                log_msg_ssa("Can't evaluate pointer provience of non-pointer type", log_error, ssa);
-                return (SSA_Possible_Values){0};
-            }
-            SSA_Possible_Values address_possibilities = ssa_general_evaluate(address);
-            if (address_possibilities.values_count == 0) return (SSA_Possible_Values){0};
-            SSA_Possible_Values possible_values = {0};
-            SSA_Possible_Providence_Values provience_possible_values = {0};
-            for (u32 i = 0; i < address_possibilities.values_count; i++) {
-                Pointer_Providence* address_provience = address_possibilities.values[i];
-                provience_possible_values.values_count = 0;
-                SSA_Possible_Providence_Value possible_value = {0};
-                if (type_size == 0) {
-                    possible_value.value = NULL;
-                    possible_value.bytes_filled = NULL;
-                } else {
-                    possible_value.value = alloc(type_size);
-                    possible_value.bytes_filled = alloc(type_size);
-                }
-                ptr_append(provience_possible_values.values, provience_possible_values.values_count, provience_possible_values.values_capacity, possible_value);
-                bool res = _ssa_find_value_at_providence(block, location, address_provience, type_size, type, &provience_possible_values);
-                if (res == false) return (SSA_Possible_Values){0};
-
-                for (u32 j = 0; j < provience_possible_values.values_count; j++) {
-                    SSA_Possible_Providence_Value possible_value = provience_possible_values.values[j];
-                    bool all_bytes_full = true;
-                    for (i64 k = 0; k < type_size; k++) {
-                        if (possible_value.bytes_filled[k] == 0) all_bytes_full = false;
-                    }
-                    if (all_bytes_full) {
-                        ptr_append(possible_values.values, possible_values.values_count, possible_values.values_capacity, possible_value.value);
-                    } else {
-                        ptr_append(possible_values.values, possible_values.values_count, possible_values.values_capacity, NULL);
-                    }
-                }
-            }
-
-            bool all_null = true;
-            for (u32 i = 0; i < possible_values.values_count; i++) {
-                if (possible_values.values[i] != NULL) {
-                    all_null = false;
-                    break;
-                }
-            }
-            if (all_null) {
-                log_msg_ssa("Failed to determine load value at compile time", log_error, ssa);
-                return (SSA_Possible_Values){0};
-            }
-
-            ssa_possible_values_consolidate(&possible_values, type);
-            return possible_values;
-        }
-        case SSA_Kind_Default_Value: {
-            assert(false);
-        }
-        case SSA_Kind_Return:
-        case SSA_Kind_Build:
-        case SSA_Kind_Store:
-        case SSA_Kind_Invalid: {
-            log_msg_ssa("Trying to evaluate unevaluateable ssa", log_error, ssa);
-            return (SSA_Possible_Values){0};
-        }
-    }
-}
-
-SSA_Possible_Values ssa_general_evaluate(SSA* ssa) {
-    SSA_Possible_Values possible_values = {0};
-    if (ssa_has_been_evaluated(ssa, &possible_values)) return possible_values;
-    if (ssa_type_check(ssa) == false) return (SSA_Possible_Values){0};
-    possible_values = _ssa_general_evaluate(ssa);
-
-    // Cache value
-    SSA_Compile_Time_Value value = {0};
-    value.possible_values = possible_values;
-    value.function_context = ssa_get_function_context();
-    ptr_append(ssa->compile_time_value, ssa->compile_time_value_count, ssa->compile_time_value_capacity, value);
-
-    if (value.possible_values.values_count == 0) {
-        log_msg_ssa("Failed to evaluate compile time value", log_info, ssa);
-    } else {
-        log_msg_ssa("Evaluated compile time value", log_debug, ssa);
-    }
-
-    return possible_values;
-}
-
-SSA_Possible_Values ssa_general_evaluate_speculative(SSA* ssa) {
-    u32 log_location = log_end_location();
-    SSA_Possible_Values possible_values = ssa_general_evaluate(ssa);
-    if (possible_values.values_count == 0 && log_has_msg_after(log_location)) {
-        Log* new_logs = context.logs + log_location;
-        u32 new_logs_count = context.logs_count - log_location;
-        Log* new_logs_memory = alloc(sizeof(Log) * new_logs_count);
-        memcpy(new_logs_memory, new_logs, sizeof(Log) * new_logs_count);
-        new_logs = new_logs_memory;
-
-        for (u32 i = 0; i < ssa->compile_time_value_count; i++) {
-            SSA_Compile_Time_Value* compile_time_value = ssa->compile_time_value + i;
-            if (compile_time_value->function_context == ssa_get_function_context()) {
-                compile_time_value->displayed_logs = false;
-                compile_time_value->log = new_logs;
-                compile_time_value->log_count = new_logs_count;
-                break;
-            }
-        }
-        log_clear_after(log_location);
-    }
-
-    return possible_values;
-}
-
-void* ssa_evaluate(SSA* ssa) {
-    SSA_Possible_Values value = ssa_general_evaluate(ssa);
-    if (value.values_count == 0) return NULL;
-    if (value.values_count > 1) {
-        log_msg_ssa("Can't evaluate as there are multiple possible values", log_error, ssa);
-        return NULL;
-    }
-    return value.values[0];
-}
-
-bool ssa_type_check_block(SSA_Block* block) {
-    bool function_res = true;
-    for (u32 i = 0; i < block->statement_lists_count; i++) {
-        SSA_List* list = block->statement_lists + i;
-        for (u32 j = 0; j < list->statements_count; j++) {
-            SSA* ssa = list->statements + j;
-            bool res = ssa_type_check(ssa);
-            function_res = function_res && res;
-        }
-    }
-    return function_res;
-}
-
-bool ssa_type_check_call(SSA* ssa) {
-    assert(ssa->kind == SSA_Kind_Call);
-    SSA* setup = ssa->data.call.setup;
-    Function_Context* function_context = ssa_evaluate(setup);
-    if (function_context == NULL) return false;
-    SSA* callee = setup->data.call_setup.callee;
-    Function* function = ssa_evaluate_function(callee);
-    if (function == NULL) return false;
-
-    ssa_push_function_context(function_context);
-
-    bool res = true;
-    switch (function->kind) {
-        case Function_Kind_Invalid: {
-            internal_compiler_error();
-        }
-        case Function_Kind_Internal: {
-            SSA_Block* function_block = &function->data.internal.body;
-            res = ssa_type_check_block(function_block);
-            break;
-        }
-        case Function_Kind_Intrinsic: {
-            Function_Intrinsic* intrinsic = &function->data.intrinsic;
-            switch (intrinsic->kind) {
-                case Intrinsic_Function_Kind_Invalid: {
-                    internal_compiler_error();
-                }
-                case Intrinsic_Function_Uint_Type:
-                case Intrinsic_Function_Float_Type:
-                case Intrinsic_Function_Int_Type: {
-                    SSA* p1 = function_context->parameters[0];
-                    SSA* p1_type_ssa = function->parameter_types[0];
-                    Type* p1_type = ssa_evaluate_type(p1_type_ssa);
-                    Type i64_type = {0};
-                    i64_type.kind = Type_Kind_Int;
-                    i64_type.data.int_.bits = 64;
-                    // bool can_cast = ssa_can_explicit_cast(p1_type, &i64_type);
-                    if (p1_type->kind != Type_Kind_Int && p1_type->kind != Type_Kind_Uint && p1_type->kind != Type_Kind_Int_Literal) {
-                        log_msg_ssa("Can't cast to int_type(64)", log_error, function_context->arguments[0]);
-                        res = false;
-                        break;
-                    }
-                    void* p1_value = ssa_evaluate(p1);
-                    res = p1_value != NULL;
-                    if (res == false) break;
-                    if (intrinsic->kind == Intrinsic_Function_Float_Type) {
-                        i64* p1_cast_i64 = ssa_cast_value(p1_value, p1_type, &i64_type);
-                        i64 p1_val = *p1_cast_i64;
-                        if (p1_val != 16 && p1_val != 32 && p1_val != 64 && p1_val != 128) {
-                            log_msg_ssa("Float type must be 16, 32, 64, or 128 bits", log_error, function_context->arguments[0]);
-                            res = false;
-                            break;
-                        }
-                    }
-
-                    res = true;
-                    break;
-                }
-                case Intrinsic_Function_Kind_Compile_To_LLVM_IR: {
-                    SSA* p1 = function_context->parameters[0];
-                    Function* main_function = ssa_evaluate_function(p1);
-                    res = main_function != NULL;
-                    if (res == false) break;
-                    assert(false);
-                }
-            }
-        }
-    }
-
-    ssa_pop_function_context();
-
-    return res;
-}
-
-static bool _ssa_type_check(SSA* ssa) {
-    Type* type = ssa_evaluate_type(ssa->type);
-    if (type == NULL) return false;
-    switch (ssa->kind) {
-        case SSA_Kind_Call_Setup: {
-            SSA* callee = ssa->data.call_setup.callee;
-            Function* function = ssa_evaluate_function(callee);
-            if (function == NULL) return false;
-            return true;
-        }
-        case SSA_Kind_Call: {
-            return ssa_type_check_call(ssa);
-        }
-        case SSA_Kind_Explicit_Cast: {
-            Type* cast_type = ssa_evaluate_type(ssa->data.explicit_cast.type);
-            if (cast_type == NULL) return false;
-            Type* value_type = ssa_evaluate_type(ssa->data.explicit_cast.value->type);
-            if (value_type == NULL) return false;
-
-            if (ssa_can_explicit_cast(value_type, cast_type)) {
-                return true;
-            }
-            log_msg_ssa("Can't explicit cast", log_error, ssa);
-            log_msg_ssa("Value being cast", log_info, ssa->data.explicit_cast.value);
-            log_msg_ssa("Type casting to", log_info, ssa->data.explicit_cast.type);
-            return false;
-        }
-        case SSA_Kind_Implicit_Cast: {
-            Type* cast_type = ssa_evaluate_type(ssa->data.implicit_cast.type);
-            if (cast_type == NULL) return false;
-            Type* value_type = ssa_evaluate_type(ssa->data.implicit_cast.value->type);
-            if (value_type == NULL) return false;
-
-            if (ssa_can_implicit_cast(value_type, cast_type)) {
-                return true;
-            }
-            log_msg_ssa("Can't implicit cast", log_error, ssa);
-            log_msg_ssa("Value being cast", log_info, ssa->data.implicit_cast.value);
-            log_msg_ssa("Type casting to", log_info, ssa->data.implicit_cast.type);
-            return false;
-        }
-        case SSA_Kind_Stack_Alloc: {
-            Type* type = ssa_evaluate_type(ssa->data.stack_alloc.type);
-            if (type == NULL) return false;
-            return true;
-        }
-        case SSA_Kind_Multi_Type: {
-            assert(false);
-        }
-        case SSA_Kind_Index_Multi_Type: {
-            assert(false);
-        }
-        case SSA_Kind_Load: {
-            SSA* address = ssa->data.load.address;
-            Type* address_type = ssa_evaluate_type(address->type);
-            if (address_type == NULL) return false;
-            if (address_type->kind != Type_Kind_Ptr) {
-                log_msg_ssa("Can't load from non-pointer type", log_error, ssa);
-                return false;
-            }
-            return true;
-        }
-        case SSA_Kind_Store: {
-            SSA* address = ssa->data.store.address;
-            Type* address_type = ssa_evaluate_type(address->type);
-            if (address_type == NULL) return false;
-            if (address_type->kind != Type_Kind_Ptr) {
-                log_msg_ssa("Can't store into non-pointer type", log_error, ssa);
-                return false;
-            }
-            SSA* value = ssa->data.store.value;
-            Type* value_type = ssa_evaluate_type(value->type);
-            Type* underlying_address_type = address_type->data.ptr.type;
-            if (ssa_type_equal(value_type, underlying_address_type) == false) {
-                log_msg_ssa("Can't store value of type into pointer of a different type", log_error, ssa);
-                return false;
-            }
-            return true;
-        }
-        case SSA_Kind_Pointer_Type: {
-            Type* underlying_type = ssa_evaluate_type(ssa->data.pointer_type.type);
-            if (underlying_type == NULL) return false;
-            return true;
-        }
-        case SSA_Kind_Underlying_Type: {
-            Type* ptr_type = ssa_evaluate_type(ssa->data.underlying_type.type);
-            if (ptr_type == NULL) return false;
-            if (ptr_type->kind != Type_Kind_Ptr) {
-                log_msg_ssa("Can only evaluate underlying type if type is a pointer", log_error, ssa);
-                return false;
-            }
-            return true;
-        }
-        case SSA_Kind_Build: {
-            SSA_Build* build = &ssa->data.build;
-            SSA_Block* block = &build->block;
-            return ssa_type_check_block(block);
-        }
-        case SSA_Kind_Function_Declaration:
-        case SSA_Kind_Parameter_Type:
-        case SSA_Kind_Argument_Type:
-        case SSA_Kind_Call_Return_Type:
-        case SSA_Kind_Return_Type:
-        case SSA_Kind_Return:
-        case SSA_Kind_Default_Value:
-        case SSA_Kind_Argument:
-        case SSA_Kind_Parameter:
-        case SSA_Kind_Function_Type:
-        case SSA_Kind_Type_Type:
-        case SSA_Kind_Multi_Value:
-        case SSA_Kind_Index_Multi_Value:
-        case SSA_Kind_Int_Literal_Type:
-        case SSA_Kind_Int_Literal:
-        case SSA_Kind_Float_Literal_Type:
-        case SSA_Kind_Float_Literal:
-        case SSA_Kind_Int_Type:
-        case SSA_Kind_Uint_Type:
-        case SSA_Kind_Float_Type:
-        case SSA_Kind_Void_Type:
-        case SSA_Kind_Compile_To_LLVM_IR:
-        case SSA_Kind_Call_Setup_Type: {
-            return true;
-        }
-        case SSA_Kind_Invalid: {
-            internal_compiler_error();
-            return false;
-        }
-    }
-}
-
-bool ssa_type_check(SSA* ssa) {
-    bool res = false;
-    if (ssa_has_been_type_checked(ssa, &res)) return res;
-    res = _ssa_type_check(ssa);
-
-    // Cache value
-    SSA_Has_Been_Type_Checked has_been_type_checked = {0};
-    has_been_type_checked.function_context = ssa_get_function_context();
-    has_been_type_checked.type_check_result = res;
-    ptr_append(ssa->has_been_type_checked, ssa->has_been_type_checked_count, ssa->has_been_type_checked_capacity, has_been_type_checked);
-
-    if (res == true) {
-        log_msg_ssa("Successfully type checked", log_debug, ssa);
-    } else {
-        log_msg_ssa("Failed to type check", log_info, ssa);
-    }
-
-    return res;
-}
-
-bool ssa_type_check_speculative(SSA* ssa) {
-    u32 log_location = log_end_location();
-    bool res = ssa_type_check(ssa);
-    if (res == false && log_has_msg_after(log_location)) {
-        log_clear_after(log_location);
-        Log* new_logs = context.logs + log_location;
-        u32 new_logs_count = context.logs_count - log_location;
-        Log* new_logs_memory = alloc(sizeof(Log) * new_logs_count);
-        memcpy(new_logs_memory, new_logs, sizeof(Log) * new_logs_count);
-        new_logs = new_logs_memory;
-
-        for (u32 i = 0; i < ssa->has_been_type_checked_count; i++) {
-            SSA_Has_Been_Type_Checked* has_been_type_checked = ssa->has_been_type_checked + i;
-            if (has_been_type_checked->function_context == ssa_get_function_context()) {
-                has_been_type_checked->displayed_logs = false;
-                has_been_type_checked->log = new_logs;
-                has_been_type_checked->log_count = new_logs_count;
-                break;
-            }
-        }
-        log_clear_after(log_location);
-    }
-    return res;
+SSA* ssa_ast_to_ssa_non_ref(Ast* ast, SSA_Block* block) {
+    SSA* ssa = ssa_ast_to_ssa(ast, block);
+    return ssa_load_if_ref(ssa, block, ast);
 }
 
 SSA* ssa_ast_to_ssa(Ast* ast, SSA_Block* block) {
     switch (ast->kind) {
+        case Ast_Kind_Assign: {
+            u32 lhs_count = ast->data.assign.lhs_count;
+            u32 rhs_count = ast->data.assign.lhs_count;
+            if (lhs_count == rhs_count) {
+                for (u32 i = 0; i < rhs_count; i++) {
+                    Ast* lhs_ast = &ast->data.assign.lhs[i];
+                    Ast* rhs_ast = &ast->data.assign.rhs[i];
+                    if (lhs_ast->kind == Ast_Kind_Variable_Declaration) {
+                        SSA* type = ssa_ast_to_ssa_non_ref(lhs_ast->data.variable_declaration.type, block);
+                        SSA* rhs_ssa = ssa_ast_to_ssa_non_ref(rhs_ast, block);
+                        SSA* rhs_cast = ssa_implicit_cast(rhs_ssa, type, block, rhs_ssa->ast);
+                        SSA* variable = ssa_stack_alloc(type, rhs_cast, block, lhs_ast);
+                        lhs_ast->data.variable_declaration.value = variable;
+                    } else {
+                        SSA* lhs_ssa = ssa_ast_to_ssa(lhs_ast, block);
+                        SSA* rhs_ssa = ssa_ast_to_ssa_non_ref(rhs_ast, block);
+                        SSA* cast_type = ssa_underlying_type(lhs_ssa->type, block, lhs_ssa->type->ast);
+                        SSA* rhs_cast = ssa_implicit_cast(rhs_ssa, cast_type, block, rhs_ssa->ast);
+                        SSA* store = ssa_store(rhs_cast, lhs_ssa, block, lhs_ssa->ast);
+                    }
+                }
+            } else {
+                assert(false);
+            }
+            return NULL;
+        }
         case Ast_Kind_Function_Declaration: {
             SSA* function_declaration_ast_prototype = ssa_function_declaration_ast_prototype(ast, block);
             ssa_function_declaration_ast_implement(function_declaration_ast_prototype, block);
             return function_declaration_ast_prototype;
         }
         case Ast_Kind_Int: {
-            SSA* int_literal_type = ssa_int_literal_type();
-            SSA* memory = ssa_stack_alloc(int_literal_type, block, ast);
-            SSA* int_literal = ssa_int_literal(ast->data.int_.value, block, ast);
-            SSA* store = ssa_store(int_literal, memory, block, ast);
-            return memory;
+            return ssa_int_literal(ast->data.int_.value, block, ast);
         }
         case Ast_Kind_Float: {
-            SSA* float_literal_type = ssa_float_literal_type();
-            SSA* memory = ssa_stack_alloc(float_literal_type, block, ast);
-            SSA* float_literal = ssa_float_literal(ast->data.float_.value, block, ast);
-            SSA* store = ssa_store(float_literal, memory, block, ast);
-            return memory;
+            return ssa_float_literal(ast->data.float_.value, block, ast);
         }
         case Ast_Kind_Variable: {
             Ast* declaration = ast->data.variable.variable_declaration;
@@ -1044,37 +133,34 @@ SSA* ssa_ast_to_ssa(Ast* ast, SSA_Block* block) {
             SSA* return_type = ssa_return_type(block, ast);
             for (u32 i = 0; i < return_values_count; i++) {
                 Ast* return_value = ast->data.return_.values + i;
-                SSA* return_value_ssa = ssa_ast_to_ssa(return_value, block);
-                SSA* load = ssa_load(return_value_ssa, block, return_value);
+                SSA* value = ssa_ast_to_ssa_non_ref(return_value, block);
 
                 SSA* value_return_type = NULL;
                 if (return_values_count == 1) {
                     value_return_type = return_type;
                 } else {
-                    value_return_type = ssa_index_multi_value(return_type, i, block, return_value);
+                    value_return_type = ssa_struct_type_index_number(return_type, i, block, return_value);
                 }
-                SSA* implicit_cast = ssa_implicit_cast(load, value_return_type, block, return_value);
+                SSA* implicit_cast = ssa_implicit_cast(value, value_return_type, block, return_value);
                 return_values[i] = implicit_cast;
             }
 
             if (return_values_count == 1) {
                 return ssa_return(return_values[0], block, ast);
             }
-            SSA* multi_value = ssa_multi_value(return_values, return_values_count, block, ast);
+            SSA* multi_value = ssa_struct_value(return_values, return_values_count, block, ast);
             return ssa_return(multi_value, block, ast);
         }
         case Ast_Kind_Variable_Declaration: {
-            SSA* type = ssa_ast_to_ssa(ast->data.variable_declaration.type, block);
-            SSA* variable = ssa_stack_alloc(type, block, ast);
-            ast->data.variable_declaration.value = variable;
+            SSA* type = ssa_ast_to_ssa_non_ref(ast->data.variable_declaration.type, block);
             SSA* default_value = ssa_default_value(type, block, ast);
-            SSA* store = ssa_store(default_value, variable, block, ast);
+            SSA* variable = ssa_stack_alloc(type, default_value, block, ast);
+            ast->data.variable_declaration.value = variable;
             return variable;
         }
         case Ast_Kind_Call: {
             Ast* callee = ast->data.call.callee;
-            SSA* callee_ssa = ssa_ast_to_ssa(callee, block);
-            SSA* loaded_callee = ssa_load(callee_ssa, block, callee);
+            SSA* callee_ssa = ssa_ast_to_ssa_non_ref(callee, block);
 
             Ast* argument_list = ast->data.call.argument_list;
             u32 arguments_count = argument_list->data.argument_list.arguments_count;
@@ -1082,18 +168,13 @@ SSA* ssa_ast_to_ssa(Ast* ast, SSA_Block* block) {
             SSA** arguments = alloc(sizeof(SSA*) * arguments_count);
             for (u32 i = 0; i < arguments_count; i++) {
                 Ast* argument = argument_list->data.argument_list.arguments + i;
-                SSA* argument_ssa = ssa_ast_to_ssa(argument, block);
-                SSA* loaded_argument = ssa_load(argument_ssa, block, argument);
-                arguments[i] = loaded_argument;
+                SSA* argument_ssa = ssa_ast_to_ssa_non_ref(argument, block);
+                arguments[i] = argument_ssa;
             }
 
-            SSA* call_setup = ssa_call_setup(loaded_callee, arguments, arguments_count, block, ast);
+            SSA* call_setup = ssa_call_setup(callee_ssa, arguments, arguments_count, block, ast);
             SSA* call = ssa_call(call_setup, block, ast);
-
-            SSA* return_type = call->type;
-            SSA* memory = ssa_stack_alloc(return_type, block, ast);
-            SSA* store = ssa_store(call, memory, block, ast);
-            return memory;
+            return call;
         }
         case Ast_Kind_Build: {
             SSA* build_ast_prototype = ssa_build_ast_prototype(ast, block);
@@ -1101,11 +182,7 @@ SSA* ssa_ast_to_ssa(Ast* ast, SSA_Block* block) {
             return build_ast_prototype;
         }
         case Ast_Kind_Intrinsic: {
-            SSA* value = ssa_ast_intrinsic(ast->data.intrinsic);
-            SSA* value_type = value->type;
-            SSA* memory = ssa_stack_alloc(value_type, block, ast);
-            SSA* store = ssa_store(value, memory, block, ast);
-            return memory;
+            return ssa_ast_intrinsic(ast->data.intrinsic);
         }
         case Ast_Kind_Binary_Operation:
         case Ast_Kind_Argument_List:
@@ -1120,11 +197,1395 @@ SSA* ssa_ast_to_ssa(Ast* ast, SSA_Block* block) {
     }
 }
 
+static bool _ssa_type_check(SSA* ssa, Type* type) {
+    switch (ssa->kind) {
+        case SSA_Kind_Store: {
+            SSA* address = ssa->data.store.address;
+            Type* address_type = ssa_type(address);
+            if (address_type == NULL) return false;
+            if (address_type->kind != Type_Kind_Ptr) {
+                log_msg_ssa("address type is not ptr", log_error, address);
+                return false;
+            }
+            SSA* value = ssa->data.store.value;
+            Type* value_type = ssa_type(value);
+            if (value_type == NULL) return false;
+            Type* address_underlying_type = address_type->data.ptr.type;
+            if (!ssa_type_equal(value_type, address_underlying_type)) {
+                log_msg_ssa("value type does not match address underlying type", log_error, ssa);
+                return false;
+            }
+            return true;
+        }
+        case SSA_Kind_Load: {
+            SSA* address = ssa->data.load.address;
+            Type* address_type = ssa_type(address);
+            if (address_type == NULL) return false;
+            if (address_type->kind != Type_Kind_Ptr) {
+                log_msg_ssa("address type is not ptr", log_error, address);
+                return false;
+            }
+            return true;
+        }
+        case SSA_Kind_Stack_Alloc: {
+            SSA* alloc_type_ssa = ssa->data.stack_alloc.type;
+            Type* alloc_type = ssa_evaluate_type(alloc_type_ssa);
+            if (alloc_type == NULL) return false;
+
+            assert(type->kind == Type_Kind_Ptr);
+            assert(type->data.ptr.allocator != NULL);
+            Allocator* allocator = *type->data.ptr.allocator;
+            assert(allocator->value.kind == Allocator_Value_Kind_Unspecified);
+            allocator->value.kind = Allocator_Value_Kind_Stack;
+            return true;
+        }
+        case SSA_Kind_Implicit_Cast: {
+            Type* from_type = ssa_type(ssa->data.implicit_cast.value);
+            if (from_type == NULL) return false;
+            assert(ssa_type_equal(ssa_evaluate_type(ssa->data.implicit_cast.type), type));
+
+            bool res = ssa_can_implicit_cast(from_type, type);
+            if (!res) {
+                log_msg_ssa("Can't implicit cast from type", log_error, ssa);
+                log_msg_ssa("From type", log_info, ssa->data.implicit_cast.value->type);
+                log_msg_ssa("To type", log_info, ssa->type);
+                return false;
+            }
+            ssa_cast_type_allocator(from_type, type);
+            return true;
+        }
+        case SSA_Kind_Explicit_Cast: {
+            Type* from_type = ssa_type(ssa->data.explicit_cast.value);
+            if (from_type == NULL) return false;
+            Type* to_type = ssa_evaluate_type(ssa->data.explicit_cast.type);
+            if (to_type == NULL) return false;
+
+            bool res = ssa_can_explicit_cast(from_type, to_type);
+            if (res) ssa_cast_type_allocator(type, to_type);
+            return res;
+        }
+        case SSA_Kind_Call_Setup: {
+            SSA* callee = ssa->data.call_setup.callee;
+            Function* function = ssa_evaluate_function(callee);
+            if (function == NULL) return false;
+            if (ssa->data.call_setup.arguments_count > function->parameter_count) {
+                log_msg_ssa("Too many arguments to call function", log_error, ssa);
+                return false;
+            }
+            return true;
+        }
+        case SSA_Kind_Call_Return_Type: {
+            SSA* call_setup = ssa->data.call_return_type.setup;
+            Function_Context* function_context = ssa_evaluate_function_context(call_setup);
+            if (function_context == NULL) return false;
+            ssa_type_set_allocator_function_return_full(type);
+            return true;
+        }
+        case SSA_Kind_Call: {
+            return ssa_type_check_call(ssa, type);
+        }
+        case SSA_Kind_Pointer_Type: {
+            SSA* pointer_of_type_ssa = ssa->data.pointer_type.type;
+            Type* pointer_of_type = ssa_evaluate_type(pointer_of_type_ssa);
+            if (pointer_of_type == NULL) return false;
+            return true;
+        }
+        case SSA_Kind_Underlying_Type: {
+            SSA* ptr_type_ssa = ssa->data.underlying_type.type;
+            Type* ptr_type = ssa_evaluate_type(ptr_type_ssa);
+            if (ptr_type == NULL) return false;
+            if (ptr_type->kind != Type_Kind_Ptr) {
+                log_msg_ssa("Can't get underlying type of non-ptr type", log_error, ssa);
+                return false;
+            }
+            return true;
+        }
+        case SSA_Kind_Struct_Type: {
+            for (u32 i = 0; i < ssa->data.struct_type.field_count; i++) {
+                SSA* field_type_ssa = ssa->data.struct_type.field_types[i];
+                Type* field_type = ssa_evaluate_type(field_type_ssa);
+                if (field_type == NULL) return false;
+                i64 field_size = ssa_type_size(field_type);
+                if (field_size == 0) {
+                    log_msg_ssa("Can't have this type inside a struct", log_error, field_type_ssa);
+                    return false;
+                }
+            }
+            return true;
+        }
+        case SSA_Kind_Struct_Index_Number: {
+            Type* struct_type = ssa_type(ssa->data.struct_index_number.struct_value);
+            if (struct_type == NULL) return false;
+            if (struct_type->kind != Type_Kind_Struct) {
+                log_msg_ssa("Can't index a non-struct type", log_error, ssa);
+                return false;
+            }
+            u32 index = ssa->data.struct_index_number.index;
+            if (index >= struct_type->data.struct_.field_count) {
+                log_msg_ssa("Index beyond struct type fields", log_error, ssa);
+                return false;
+            }
+            return true;
+        }
+        case SSA_Kind_Struct_Type_Index_Number: {
+            Type* struct_type = ssa_evaluate_type(ssa->data.struct_type_index_number.struct_type);
+            if (struct_type == NULL) return false;
+            if (struct_type->kind != Type_Kind_Struct) {
+                log_msg_ssa("Can't index a non-struct type", log_error, ssa);
+                return false;
+            }
+            u32 index = ssa->data.struct_type_index_number.index;
+            if (index >= struct_type->data.struct_.field_count) {
+                log_msg_ssa("Index beyond struct type fields", log_error, ssa);
+                return false;
+            }
+            return true;
+        }
+        case SSA_Kind_Struct_Index_Name: {
+            Type* struct_type = ssa_type(ssa->data.struct_index_name.struct_value);
+            if (struct_type == NULL) return false;
+            if (struct_type->kind != Type_Kind_Struct) {
+                log_msg_ssa("Can't index a non-struct type", log_error, ssa);
+                return false;
+            }
+            utf8 index_name = ssa->data.struct_index_name.index_name;
+            for (u32 i = 0; i < struct_type->data.struct_.field_count; i++) {
+                utf8* field_name = struct_type->data.struct_.field_names + i;
+                if (utf8_equal(*field_name, index_name)) {
+                    return true;
+                }
+            }
+            log_msg_ssa("No field named", log_error, ssa);
+            return false;
+        }
+        case SSA_Kind_Struct_Type_Index_Name: {
+            SSA* struct_type_ssa = ssa->data.struct_type_index_name.struct_type;
+            Type* struct_type = ssa_evaluate_type(struct_type_ssa);
+            if (struct_type == NULL) return false;
+            if (struct_type->kind != Type_Kind_Struct) {
+                log_msg_ssa("Can't index a non-struct type", log_error, ssa);
+                return false;
+            }
+            utf8 index_name = ssa->data.struct_type_index_name.index_name;
+            for (u32 i = 0; i < struct_type->data.struct_.field_count; i++) {
+                utf8* field_name = struct_type->data.struct_.field_names + i;
+                if (utf8_equal(*field_name, index_name)) {
+                    return true;
+                }
+            }
+            log_msg_ssa("No field named", log_error, ssa);
+            return false;
+        }
+        case SSA_Kind_Parameter: {
+            u32 index = ssa->data.parameter.index;
+            ssa_type_set_allocator_function_parameter_full(type, index);
+            return true;
+        }
+        case SSA_Kind_Default_Value:
+        case SSA_Kind_Return:
+        case SSA_Kind_Argument:
+        case SSA_Kind_Argument_Type:
+        case SSA_Kind_Parameter_Type:
+        case SSA_Kind_Build:
+        case SSA_Kind_Struct_Value:
+        case SSA_Kind_Return_Type:
+        case SSA_Kind_Function_Declaration:
+        case SSA_Kind_Function_Type:
+        case SSA_Kind_Type_Type:
+        case SSA_Kind_Int_Literal_Type:
+        case SSA_Kind_Int_Literal:
+        case SSA_Kind_Float_Literal_Type:
+        case SSA_Kind_Float_Literal:
+        case SSA_Kind_Int_Type:
+        case SSA_Kind_Uint_Type:
+        case SSA_Kind_Float_Type:
+        case SSA_Kind_Void_Type:
+        case SSA_Kind_Call_Setup_Type:
+        case SSA_Kind_Compile_To_LLVM_IR: {
+            return true;
+        }
+        case SSA_Kind_Invalid: {
+            internal_compiler_error();
+        }
+    }
+}
+
+bool ssa_type_check(SSA* ssa) {
+    bool res = false;
+    if (ssa_already_type_checked(ssa, &res)) return res;
+    Type* type = ssa_evaluate_type(ssa->type);
+    if (type != NULL) res = _ssa_type_check(ssa, type);
+    assert(res == false || ssa_type_allocator_valid(type));
+    if (res) {
+        log_msg_ssa("Type check succeeded", log_debug, ssa);
+    } else {
+        if (type == NULL) {
+            log_msg_ssa("Type check failed becuase could not evaluate type", log_info, ssa);
+        } else {
+            log_msg_ssa("Type check failed", log_info, ssa);
+        }
+    }
+    ssa_cache_type_check(ssa, res, type);
+    return res;
+}
+
+Type* ssa_type(SSA* ssa) {
+    Function_Context* function_context = ssa_get_cache_function_context(ssa);
+    for (u32 i = 0; i < ssa->ssa_per_function_context_values_count; i++) {
+        SSA_Per_Function_Context_Values* per_function_context_values = ssa->ssa_per_function_context_values + i;
+        if (per_function_context_values->function_context == function_context) {
+            Type* type = &per_function_context_values->type;
+            if (type->kind == Type_Kind_Invalid) return NULL;
+            return type;
+        }
+    }
+    return NULL;
+}
+
+bool ssa_already_type_checked(SSA* ssa, bool* out_res) {
+    Function_Context* function_context = ssa_get_cache_function_context(ssa);
+    for (u32 i = 0; i < ssa->ssa_per_function_context_values_count; i++) {
+        SSA_Per_Function_Context_Values* per_function_context_values = ssa->ssa_per_function_context_values + i;
+        if (per_function_context_values->function_context == function_context) {
+            *out_res = per_function_context_values->type_check_result;
+            return per_function_context_values->type_checked;
+        }
+    }
+    *out_res = false;
+    return false;
+}
+
+void ssa_cache_type_check(SSA* ssa, bool res, Type* type) {
+    Function_Context* function_context = ssa_get_cache_function_context(ssa);
+
+    SSA_Per_Function_Context_Values per_function_context_values = {0};
+    per_function_context_values.function_context = function_context;
+    per_function_context_values.type_check_result = res;
+    if (type != NULL) per_function_context_values.type = *type;
+    per_function_context_values.type_checked = true;
+    ptr_append(ssa->ssa_per_function_context_values, ssa->ssa_per_function_context_values_count, ssa->ssa_per_function_context_values_capacity,
+               per_function_context_values);
+}
+
+bool ssa_type_check_call(SSA* ssa, Type* type) {
+    SSA* call_setup = ssa->data.call.setup;
+    Function_Context* function_context = ssa_evaluate_function_context(call_setup);
+    if (function_context == NULL) return false;
+    SSA* callee = call_setup->data.call_setup.callee;
+    Function* function = ssa_evaluate_function(callee);
+    if (function == NULL) return false;
+    All_Function_Context all = {0};
+    all.function_context = function_context;
+    ssa_push_function_context(all);
+    bool res = true;
+    switch (function->kind) {
+        case Function_Kind_Invalid: {
+            internal_compiler_error();
+        }
+        case Function_Kind_Internal: {
+            SSA_Block* function_body = &function->data.internal.body;
+            res = ssa_type_check_block(function_body);
+            break;
+        }
+        case Function_Kind_Intrinsic: {
+            switch (function->data.intrinsic.kind) {
+                case Intrinsic_Function_Kind_Invalid: {
+                    internal_compiler_error();
+                }
+                case Intrinsic_Function_Int_Type: {
+                    res = ssa_type_check_call_int_type(ssa, function_context, function);
+                    break;
+                }
+                case Intrinsic_Function_Uint_Type: {
+                    res = ssa_type_check_call_uint_type(ssa, function_context, function);
+                    break;
+                }
+                case Intrinsic_Function_Float_Type: {
+                    res = ssa_type_check_call_float_type(ssa, function_context, function);
+                    break;
+                }
+                case Intrinsic_Function_Kind_Compile_To_LLVM_IR: {
+                    res = ssa_type_check_call_compile_to_llvm_ir(ssa, function_context, function);
+                    break;
+                }
+            }
+            break;
+        }
+    }
+    ssa_pop_function_context();
+    if (res) ssa_type_set_allocator_function_call_return_full(type, ssa);
+    return res;
+}
+
+bool ssa_type_check_call_int_type(SSA* ssa, Function_Context* function_context, Function* function) {
+    SSA* bits_parameter = function_context->parameters[0];
+    Type* bits_parameter_type = ssa_type(bits_parameter);
+    if (bits_parameter_type == NULL) return false;
+    if (bits_parameter_type->kind != Type_Kind_Int && bits_parameter_type->kind != Type_Kind_Uint && bits_parameter_type->kind != Type_Kind_Int_Literal) {
+        log_msg_ssa("Parameter to int type function is not int or uint", log_error, function_context->arguments[0]);
+        return false;
+    }
+
+    void* bits_value = ssa_evaluate(bits_parameter);
+    if (bits_value == NULL) return false;
+    Type i64_type = {0};
+    i64_type.kind = Type_Kind_Int;
+    i64_type.data.int_.bits = 64;
+    i64* bits_i64 = ssa_cast_value(bits_value, bits_parameter_type, &i64_type);
+    if (bits_i64 == NULL) internal_compiler_error();
+    i64 bits = *bits_i64;
+
+    if (bits <= 0) {
+        log_msg_ssa("Parameter to int type function is not positive", log_error, function_context->arguments[0]);
+        return false;
+    }
+
+    return true;
+}
+
+bool ssa_type_check_call_uint_type(SSA* ssa, Function_Context* function_context, Function* function) {
+    SSA* bits_parameter = function_context->parameters[0];
+    Type* bits_parameter_type = ssa_type(bits_parameter);
+    if (bits_parameter_type == NULL) return false;
+    if (bits_parameter_type->kind != Type_Kind_Int && bits_parameter_type->kind != Type_Kind_Uint && bits_parameter_type->kind != Type_Kind_Int_Literal) {
+        log_msg_ssa("Parameter to int type function is not int or uint", log_error, function_context->arguments[0]);
+        return false;
+    }
+
+    void* bits_value = ssa_evaluate(bits_parameter);
+    if (bits_value == NULL) return false;
+    Type i64_type = {0};
+    i64_type.kind = Type_Kind_Int;
+    i64_type.data.int_.bits = 64;
+    i64* bits_i64 = ssa_cast_value(bits_value, bits_parameter_type, &i64_type);
+    if (bits_i64 == NULL) internal_compiler_error();
+    i64 bits = *bits_i64;
+
+    if (bits <= 0) {
+        log_msg_ssa("Parameter to int type function is not positive", log_error, function_context->arguments[0]);
+        return false;
+    }
+
+    return true;
+}
+
+bool ssa_type_check_call_float_type(SSA* ssa, Function_Context* function_context, Function* function) {
+    SSA* bits_parameter = function_context->parameters[0];
+    Type* bits_parameter_type = ssa_type(bits_parameter);
+    if (bits_parameter_type == NULL) return false;
+    if (bits_parameter_type->kind != Type_Kind_Int && bits_parameter_type->kind != Type_Kind_Uint && bits_parameter_type->kind != Type_Kind_Int_Literal) {
+        log_msg_ssa("Parameter to int type function is not int or uint", log_error, function_context->arguments[0]);
+        return false;
+    }
+
+    void* bits_value = ssa_evaluate(bits_parameter);
+    if (bits_value == NULL) return false;
+    Type i64_type = {0};
+    i64_type.kind = Type_Kind_Int;
+    i64_type.data.int_.bits = 64;
+    i64* bits_i64 = ssa_cast_value(bits_value, bits_parameter_type, &i64_type);
+    if (bits_i64 == NULL) internal_compiler_error();
+    i64 bits = *bits_i64;
+
+    if (bits <= 0) {
+        log_msg_ssa("Parameter to int type function is not positive", log_error, function_context->arguments[0]);
+        return false;
+    }
+
+    if (bits != 64 && bits != 32) {
+        log_msg_ssa("Parameter to float type function can only be 32 or 64", log_error, function_context->arguments[0]);
+        return false;
+    }
+
+    return true;
+}
+
+bool ssa_type_check_call_compile_to_llvm_ir(SSA* ssa, Function_Context* function_context, Function* function) {
+    SSA* parameter_0_ssa = function_context->parameters[0];
+    Function* compile_function = ssa_evaluate_function(parameter_0_ssa);
+    if (compile_function == NULL) return false;
+
+    SSA_Block* function_setup_block = &compile_function->setup_block;
+    if (!ssa_type_check_block(function_setup_block)) return false;
+
+    SSA* compile_function_return_type = compile_function->return_type;
+    Type* compile_function_return_type_type = ssa_evaluate_type(compile_function_return_type);
+    if (compile_function_return_type_type == NULL) return false;
+    if (compile_function_return_type_type->kind == Type_Kind_Void) {
+    } else if (compile_function_return_type_type->kind == Type_Kind_Int) {
+        if (compile_function_return_type_type->data.int_.bits != 32) {
+            log_msg_ssa("Return type of compile to llvm ir function must be 32 bit int or void", log_error, function_context->arguments[0]);
+            return false;
+        }
+    } else {
+        log_msg_ssa("Return type of compile to llvm ir function must be 32 bit int or void", log_error, function_context->arguments[0]);
+        return false;
+    }
+
+    if (compile_function->parameter_count != 0) {
+        assert(false);
+    }
+
+    return true;
+}
+
+bool ssa_type_check_block(SSA_Block* block) {
+    for (u32 i = 0; i < block->statement_lists_count; i++) {
+        SSA_List* list = block->statement_lists + i;
+        for (u32 j = 0; j < list->statements_count; j++) {
+            SSA* ssa = list->statements + j;
+            if (!ssa_type_check(ssa)) return false;
+        }
+    }
+    return true;
+}
+
+bool ssa_type_check_builds() {
+    SSA_Block* block = &context.global_block;
+    for (u32 i = 0; i < block->statement_lists_count; i++) {
+        SSA_List* list = block->statement_lists + i;
+        for (u32 j = 0; j < list->statements_count; j++) {
+            SSA* ssa = list->statements + j;
+            if (ssa->kind == SSA_Kind_Build) {
+                SSA_Build* build = &ssa->data.build;
+                Function_Context* function_context = build->function_context;
+                All_Function_Context all = {0};
+                all.function_context = function_context;
+                ssa_push_function_context(all);
+                bool res = ssa_type_check_block(&build->block);
+                ssa_pop_function_context();
+                if (!res) return false;
+            }
+        }
+    }
+    return true;
+}
+
+Function_Context* ssa_evaluate_function_context(SSA* ssa) {
+    Type* type = ssa_type(ssa);
+    if (type == NULL) return NULL;
+    if (type->kind != Type_Kind_Call_Setup) {
+        log_msg_ssa("Can't evaluate value to function", log_error, ssa);
+        return NULL;
+    }
+    Function_Context** function_context = ssa_evaluate(ssa);
+    if (function_context == NULL) return NULL;
+    return *function_context;
+}
+
+Function* ssa_evaluate_function(SSA* ssa) {
+    Type* type = ssa_type(ssa);
+    if (type == NULL) return NULL;
+    if (type->kind != Type_Kind_Function) {
+        log_msg_ssa("Can't evaluate value to function", log_error, ssa);
+        return NULL;
+    }
+    return *(Function**)ssa_evaluate(ssa);
+}
+
+Type* ssa_evaluate_type(SSA* ssa) {
+    if (ssa->kind == SSA_Kind_Type_Type) return context.intrinsic_ssa_block.type_type_value;
+    Type* type = ssa_type(ssa);
+    if (type == NULL) return NULL;
+    if (type->kind != Type_Kind_Type) {
+        log_msg_ssa("Can't evaluate value to type", log_error, ssa);
+        return NULL;
+    }
+    return ssa_evaluate(ssa);
+}
+
+static bool ssa_infer_trace_argument(Infer_Context* infer_context, SSA* argument_side, SSA* declaration_side, bool* out_conflict) {
+    *out_conflict = false;
+    if (declaration_side->kind == SSA_Kind_Implicit_Cast) {
+        SSA* value = declaration_side->data.implicit_cast.value;
+        return ssa_infer_trace_argument(infer_context, argument_side, value, out_conflict);
+    }
+    if (declaration_side->kind == SSA_Kind_Explicit_Cast) {
+        SSA* value = declaration_side->data.explicit_cast.value;
+        return ssa_infer_trace_argument(infer_context, argument_side, value, out_conflict);
+    }
+    if (declaration_side->kind == SSA_Kind_Call && argument_side->kind == SSA_Kind_Call) {
+        SSA* decl_setup = declaration_side->data.call.setup;
+        SSA* argument_setup = argument_side->data.call.setup;
+
+        bool type_check_res = false;
+
+        context.evaluate_context = infer_context->decl_side_evaluate_context;
+        SSA* decl_callee = decl_setup->data.call_setup.callee;
+        if (!ssa_already_type_checked(decl_callee, &type_check_res)) return false;
+        if (!type_check_res) return false;
+        Function* decl_function = ssa_evaluate_function(decl_callee);
+        if (decl_function == NULL) return false;
+
+        context.evaluate_context = infer_context->arg_side_evaluate_context;
+        SSA* argument_callee = argument_setup->data.call_setup.callee;
+        Function* argument_function = ssa_evaluate_function(argument_callee);
+        if (argument_function == NULL) return false;
+
+        if (decl_function != argument_function) return false;
+
+        u32 min_args = min(decl_setup->data.call_setup.arguments_count, argument_setup->data.call_setup.arguments_count);
+        for (u32 i = 0; i < min_args; i++) {
+            SSA* decl_argument = decl_setup->data.call_setup.arguments[i];
+            SSA* argument_argument = argument_setup->data.call_setup.arguments[i];
+            if (ssa_infer_trace_argument(infer_context, argument_argument, decl_argument, out_conflict)) return true;
+        }
+        return false;
+    }
+    if (declaration_side->kind == SSA_Kind_Argument) {
+        u32 index = declaration_side->data.argument.index;
+        SSA* prev_argument = infer_context->arguments[index];
+        if (prev_argument == NULL) {
+            infer_context->arguments[index] = argument_side;
+            return true;
+        }
+
+        context.evaluate_context = infer_context->arg_side_evaluate_context;
+
+        Type* argument_type = ssa_type(argument_side);
+        if (argument_type == NULL) return false;
+        Type* prev_argument_type = ssa_type(prev_argument);
+        if (prev_argument_type == NULL) return false;
+        if (!ssa_type_equal(argument_type, prev_argument_type)) {
+            log_msg_ssa("Conflict between inferred argument types", log_error, argument_side);
+            *out_conflict = true;
+            return false;
+        }
+
+        void* argument_value = ssa_evaluate(argument_side);
+        if (argument_value == NULL) return false;
+        void* prev_argument_value = ssa_evaluate(prev_argument);
+        if (prev_argument_value == NULL) return false;
+        if (!ssa_compile_time_value_equal(argument_value, prev_argument_value, argument_type)) {
+            log_msg_ssa("Conflict between inferred argument values", log_error, argument_side);
+            *out_conflict = true;
+            return false;
+        }
+        return false;
+    }
+    return false;
+}
+
+static bool* _ssa_infer_get_argument_dependencies_found_for_ssa(SSA* ssa, SSA_Block* block, Infer_Context* infer_context) {
+    u32 argument_dependencies_index = 0;
+    for (u32 i = 0; i < block->statement_lists_count; i++) {
+        SSA_List* list = block->statement_lists + i;
+        for (u32 j = 0; j < list->statements_count; j++) {
+            SSA* statement = list->statements + j;
+            if (statement == ssa) {
+                return infer_context->argument_dependencies[argument_dependencies_index];
+            }
+            argument_dependencies_index++;
+        }
+    }
+    internal_compiler_error();
+}
+
+static void _ssa_infer_take_dependencies(bool* argument_dependencies, SSA* other_ssa, SSA_Block* block, Infer_Context* infer_context) {
+    if (other_ssa->block->kind == SSA_Block_Kind_Global) return;
+    bool* other_argument_dependencies = _ssa_infer_get_argument_dependencies_found_for_ssa(other_ssa, block, infer_context);
+    for (u32 i = 0; i < infer_context->arguments_count; i++) {
+        bool other_argument_dependency = other_argument_dependencies[i];
+        if (other_argument_dependency) argument_dependencies[i] = true;
+    }
+}
+
+bool ssa_infer_arguments(SSA** arguments, SSA** parameters, u32 arguments_count, SSA_Block* setup_block, All_Function_Context function_context,
+                         SSA* setup_ssa) {
+    Evaluate_Context* argument_side_context = context.evaluate_context;
+
+    Evaluate_Context parameters_side_context_s_mem = {0};
+    Evaluate_Context* parameters_side_context = &parameters_side_context_s_mem;
+    parameters_side_context->function_context_stack_count = argument_side_context->function_context_stack_count;
+    parameters_side_context->function_context_stack_capacity = parameters_side_context->function_context_stack_count + 1;
+    parameters_side_context->function_context_stack = alloc(sizeof(All_Function_Context) * parameters_side_context->function_context_stack_capacity);
+    memcpy(parameters_side_context->function_context_stack, argument_side_context->function_context_stack,
+           sizeof(All_Function_Context) * parameters_side_context->function_context_stack_count);
+
+    context.evaluate_context = parameters_side_context;
+    ssa_push_function_context(function_context);
+    context.evaluate_context = argument_side_context;
+
+    Infer_Context infer_context_s_mem = {0};
+    Infer_Context* infer_context = &infer_context_s_mem;
+    infer_context->arguments = arguments;
+    infer_context->arguments_count = arguments_count;
+    infer_context->arg_side_evaluate_context = argument_side_context;
+    infer_context->decl_side_evaluate_context = parameters_side_context;
+
+    for (u32 i = 0; i < setup_block->statement_lists_count; i++) {
+        SSA_List* list = setup_block->statement_lists + i;
+        for (u32 j = 0; j < list->statements_count; j++) {
+            bool* argument_dependencies = alloc(sizeof(bool) * arguments_count);
+            SSA* ssa = list->statements + j;
+            _ssa_infer_take_dependencies(argument_dependencies, ssa->type, setup_block, infer_context);
+            switch (ssa->kind) {
+                case SSA_Kind_Argument: {
+                    u32 arg_index = ssa->data.argument.index;
+                    assert(arg_index < arguments_count);
+                    argument_dependencies[arg_index] = true;
+                    break;
+                }
+                case SSA_Kind_Argument_Type: {
+                    u32 arg_index = ssa->data.argument_type.index;
+                    assert(arg_index < arguments_count);
+                    argument_dependencies[arg_index] = true;
+                    break;
+                }
+                case SSA_Kind_Store: {
+                    SSA* address = ssa->data.store.address;
+                    SSA* value = ssa->data.store.value;
+                    _ssa_infer_take_dependencies(argument_dependencies, address, setup_block, infer_context);
+                    _ssa_infer_take_dependencies(argument_dependencies, value, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Load: {
+                    SSA* address = ssa->data.load.address;
+                    _ssa_infer_take_dependencies(argument_dependencies, address, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Stack_Alloc: {
+                    SSA* type = ssa->data.stack_alloc.type;
+                    SSA* default_value = ssa->data.stack_alloc.initial_value;
+                    _ssa_infer_take_dependencies(argument_dependencies, type, setup_block, infer_context);
+                    _ssa_infer_take_dependencies(argument_dependencies, type, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Return: {
+                    SSA* value = ssa->data.return_.return_value;
+                    _ssa_infer_take_dependencies(argument_dependencies, value, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Implicit_Cast: {
+                    SSA* value = ssa->data.implicit_cast.value;
+                    SSA* type = ssa->data.implicit_cast.type;
+                    _ssa_infer_take_dependencies(argument_dependencies, value, setup_block, infer_context);
+                    _ssa_infer_take_dependencies(argument_dependencies, type, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Explicit_Cast: {
+                    SSA* value = ssa->data.explicit_cast.value;
+                    SSA* type = ssa->data.explicit_cast.type;
+                    _ssa_infer_take_dependencies(argument_dependencies, value, setup_block, infer_context);
+                    _ssa_infer_take_dependencies(argument_dependencies, type, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Call_Setup: {
+                    SSA* callee = ssa->data.call_setup.callee;
+                    _ssa_infer_take_dependencies(argument_dependencies, callee, setup_block, infer_context);
+                    for (u32 i = 0; i < ssa->data.call_setup.arguments_count; i++) {
+                        SSA* argument = ssa->data.call_setup.arguments[i];
+                        _ssa_infer_take_dependencies(argument_dependencies, argument, setup_block, infer_context);
+                    }
+                    break;
+                }
+                case SSA_Kind_Call: {
+                    SSA* setup = ssa->data.call.setup;
+                    _ssa_infer_take_dependencies(argument_dependencies, setup, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Call_Return_Type: {
+                    SSA* setup = ssa->data.call_return_type.setup;
+                    _ssa_infer_take_dependencies(argument_dependencies, setup, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Pointer_Type: {
+                    SSA* type = ssa->data.pointer_type.type;
+                    _ssa_infer_take_dependencies(argument_dependencies, type, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Underlying_Type: {
+                    SSA* type = ssa->data.underlying_type.type;
+                    _ssa_infer_take_dependencies(argument_dependencies, type, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Struct_Type: {
+                    for (u32 i = 0; i < ssa->data.struct_type.field_count; i++) {
+                        SSA* field_type = ssa->data.struct_type.field_types[i];
+                        _ssa_infer_take_dependencies(argument_dependencies, field_type, setup_block, infer_context);
+                    }
+                    break;
+                }
+                case SSA_Kind_Struct_Value: {
+                    for (u32 i = 0; i < ssa->data.struct_value.field_count; i++) {
+                        SSA* field = ssa->data.struct_value.field_values[i];
+                        _ssa_infer_take_dependencies(argument_dependencies, field, setup_block, infer_context);
+                    }
+                    break;
+                }
+                case SSA_Kind_Struct_Index_Number: {
+                    SSA* struct_value = ssa->data.struct_index_number.struct_value;
+                    _ssa_infer_take_dependencies(argument_dependencies, struct_value, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Struct_Type_Index_Number: {
+                    SSA* struct_type = ssa->data.struct_type_index_number.struct_type;
+                    _ssa_infer_take_dependencies(argument_dependencies, struct_type, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Struct_Index_Name: {
+                    SSA* struct_value = ssa->data.struct_index_name.struct_value;
+                    _ssa_infer_take_dependencies(argument_dependencies, struct_value, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Struct_Type_Index_Name: {
+                    SSA* struct_type = ssa->data.struct_type_index_name.struct_type;
+                    _ssa_infer_take_dependencies(argument_dependencies, struct_type, setup_block, infer_context);
+                    break;
+                }
+                case SSA_Kind_Default_Value:
+                case SSA_Kind_Call_Setup_Type:
+                case SSA_Kind_Int_Type:
+                case SSA_Kind_Uint_Type:
+                case SSA_Kind_Float_Type:
+                case SSA_Kind_Void_Type:
+                case SSA_Kind_Compile_To_LLVM_IR:
+                case SSA_Kind_Float_Literal:
+                case SSA_Kind_Int_Literal:
+                case SSA_Kind_Type_Type:
+                case SSA_Kind_Float_Literal_Type:
+                case SSA_Kind_Int_Literal_Type:
+                case SSA_Kind_Function_Type: {
+                    break;
+                }
+                case SSA_Kind_Build:
+                case SSA_Kind_Return_Type:
+                case SSA_Kind_Function_Declaration:
+                case SSA_Kind_Parameter:
+                case SSA_Kind_Parameter_Type:
+                case SSA_Kind_Invalid: {
+                    internal_compiler_error();
+                }
+            }
+
+            ptr_append(infer_context->argument_dependencies, infer_context->argument_dependencies_count, infer_context->argument_dependencies_capacity,
+                       argument_dependencies);
+        }
+    }
+
+    bool type_check_res = true;
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        u32 argument_dependencies_index = 0;
+        context.evaluate_context = infer_context->decl_side_evaluate_context;
+        for (u32 i = 0; i < setup_block->statement_lists_count; i++) {
+            SSA_List* list = setup_block->statement_lists + i;
+            for (u32 j = 0; j < list->statements_count; j++) {
+                SSA* ssa = list->statements + j;
+                bool* argument_dependencies = infer_context->argument_dependencies[argument_dependencies_index++];
+                bool can_type_check = true;
+                for (u32 k = 0; k < arguments_count; k++) {
+                    bool dependent_on_argument = argument_dependencies[k];
+                    SSA* argument = arguments[k];
+                    if (dependent_on_argument && argument == NULL) {
+                        can_type_check = false;
+                        break;
+                    }
+                }
+                if (!can_type_check) {
+                    continue;
+                }
+                bool res = ssa_type_check(ssa);
+                type_check_res = type_check_res && res;
+            }
+        }
+
+        for (u32 i = 0; i < arguments_count; i++) {
+            SSA* argument = arguments[i];
+            if (argument == NULL) continue;
+            SSA* argument_type = argument->type;
+            SSA* parameter = parameters[i];
+            SSA* parameter_type = parameter->type;
+            bool conflict = false;
+            bool infer_res = ssa_infer_trace_argument(infer_context, argument_type, parameter_type, &conflict);
+            if (conflict) {
+                context.evaluate_context = argument_side_context;
+                return false;
+            }
+            if (infer_res) {
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    bool infered_all_arguments = true;
+    for (u32 i = 0; i < arguments_count; i++) {
+        SSA* argument = arguments[i];
+        if (argument == NULL) {
+            log_msg_ssa("Could not infer all argument", log_error, setup_ssa);
+            infered_all_arguments = false;
+            break;
+        }
+    }
+
+    context.evaluate_context = argument_side_context;
+    return infered_all_arguments && type_check_res;
+}
+
+static void* _ssa_evaluate(SSA* ssa) {
+    switch (ssa->kind) {
+        case SSA_Kind_Invalid: {
+            internal_compiler_error();
+        }
+        case SSA_Kind_Build:
+        case SSA_Kind_Return:
+        case SSA_Kind_Store: {
+            return SSA_SUCCESS_VOID_VALUE;
+        }
+        case SSA_Kind_Load: {
+            SSA* address = ssa->data.load.address;
+            if (ssa_running_interpreter()) {
+                void* memory = ssa_evaluate(address);
+                if (memory == NULL) return NULL;
+                return *(void**)memory;
+            }
+            switch (address->kind) {
+                case SSA_Kind_Stack_Alloc: {
+                    SSA* lost_const_at = address->data.stack_alloc.lost_const_at;
+                    if (lost_const_at != NULL) {
+                        log_msg_ssa("Can't determine load at compile time", log_error, ssa);
+                        log_msg_ssa("Cause was variable lost const at", log_info, lost_const_at);
+                        return NULL;
+                    }
+                    SSA* initial_value = address->data.stack_alloc.initial_value;
+                    return ssa_evaluate(initial_value);
+                }
+                default: {
+                    break;
+                }
+            }
+            log_msg_ssa("Can't determine load at compile time", log_error, ssa);
+            return NULL;
+        }
+        case SSA_Kind_Stack_Alloc: {
+            if (ssa_running_interpreter()) {
+                All_Function_Context all = ssa_get_function_context();
+                Interpreter_Function_Context* inter_function_context = all.interpreter_function_context;
+                for (u32 i = 0; i < inter_function_context->stack_alloc_memory_map_count; i++) {
+                    SSA* ssa_stack = inter_function_context->stack_alloc_memory_map[i].ssa;
+                    if (ssa_stack == ssa) {
+                        return &inter_function_context->stack_alloc_memory_map[i].memory;
+                    }
+                }
+                internal_compiler_error();
+            }
+            log_msg_ssa("Can't evaluate stack alloc at compile time", log_error, ssa);
+            return NULL;
+        }
+        case SSA_Kind_Function_Type: {
+            return context.intrinsic_ssa_block.function_type_value;
+        }
+        case SSA_Kind_Type_Type: {
+            return context.intrinsic_ssa_block.type_type_value;
+        }
+        case SSA_Kind_Int_Literal_Type: {
+            return context.intrinsic_ssa_block.int_literal_type_value;
+        }
+        case SSA_Kind_Float_Literal_Type: {
+            return context.intrinsic_ssa_block.float_literal_type_value;
+        }
+        case SSA_Kind_Function_Declaration: {
+            Function** func = alloc(sizeof(Function*));
+            *func = &ssa->data.function_declaration.function;
+            return func;
+        }
+        case SSA_Kind_Int_Type: {
+            return context.intrinsic_ssa_block.int_type_value;
+        }
+        case SSA_Kind_Uint_Type: {
+            return context.intrinsic_ssa_block.uint_type_value;
+        }
+        case SSA_Kind_Float_Type: {
+            return context.intrinsic_ssa_block.float_type_value;
+        }
+        case SSA_Kind_Void_Type: {
+            return context.intrinsic_ssa_block.void_type_value;
+        }
+        case SSA_Kind_Compile_To_LLVM_IR: {
+            return context.intrinsic_ssa_block.compile_to_llvm_ir_value;
+        }
+        case SSA_Kind_Call_Setup_Type: {
+            return context.intrinsic_ssa_block.call_setup_type_value;
+        }
+        case SSA_Kind_Int_Literal: {
+            Big_Int* big_int = &ssa->data.int_literal.value;
+            return big_int;
+        }
+        case SSA_Kind_Float_Literal: {
+            f64* float_ = &ssa->data.float_literal.value;
+            return float_;
+        }
+        case SSA_Kind_Parameter: {
+            All_Function_Context all = ssa_get_function_context();
+            Function_Context* function_context = all.function_context;
+            u32 index = ssa->data.parameter.index;
+            assert(index < function_context->parameters_count);
+            SSA* parameter = function_context->parameters[index];
+            void* parameter_value = ssa_evaluate(parameter);
+            return parameter_value;
+        }
+        case SSA_Kind_Parameter_Type: {
+            All_Function_Context all = ssa_get_function_context();
+            Function_Context* function_context = all.function_context;
+            u32 index = ssa->data.parameter_type.index;
+            assert(index < function_context->parameters_count);
+            SSA* parameter = function_context->parameters[index];
+            Type* parameter_type = ssa_type(parameter);
+            return parameter_type;
+        }
+        case SSA_Kind_Argument: {
+            All_Function_Context all = ssa_get_function_context();
+            Function_Context* function_context = all.function_context;
+            ssa_pop_function_context();
+            u32 index = ssa->data.argument.index;
+            assert(index < function_context->parameters_count);
+            SSA* argument = function_context->arguments[index];
+            void* argument_value = ssa_evaluate(argument);
+            ssa_push_function_context(all);
+            return argument_value;
+        }
+        case SSA_Kind_Argument_Type: {
+            All_Function_Context all = ssa_get_function_context();
+            Function_Context* function_context = all.function_context;
+            ssa_pop_function_context();
+            u32 index = ssa->data.argument_type.index;
+            assert(index < function_context->parameters_count);
+            SSA* argument = function_context->arguments[index];
+            Type* argument_type = ssa_type(argument);
+            ssa_push_function_context(all);
+            return argument_type;
+        }
+        case SSA_Kind_Return_Type: {
+            All_Function_Context all = ssa_get_function_context();
+            Function_Context* function_context = all.function_context;
+            SSA* return_type = function_context->return_type;
+            if (return_type == NULL) {
+                log_msg_ssa("Can't evaluate return type for this scope", log_error, ssa);
+                return NULL;
+            }
+            void* return_type_value = ssa_evaluate(return_type);
+            return return_type_value;
+        }
+        case SSA_Kind_Implicit_Cast: {
+            Type* cast_type = ssa_evaluate_type(ssa->data.implicit_cast.type);
+            assert(cast_type != NULL);
+            void* value = ssa_evaluate(ssa->data.implicit_cast.value);
+            if (value == NULL) return NULL;
+            Type* value_type = ssa_type(ssa->data.implicit_cast.value);
+            assert(value_type != NULL);
+            return ssa_cast_value(value, value_type, cast_type);
+        }
+        case SSA_Kind_Explicit_Cast: {
+            Type* cast_type = ssa_evaluate_type(ssa->data.explicit_cast.type);
+            assert(cast_type != NULL);
+            void* value = ssa_evaluate(ssa->data.explicit_cast.value);
+            if (value == NULL) return NULL;
+            Type* value_type = ssa_type(ssa->data.explicit_cast.value);
+            assert(value_type != NULL);
+            return ssa_cast_value(value, value_type, cast_type);
+        }
+        case SSA_Kind_Call_Setup: {
+            SSA* callee = ssa->data.call_setup.callee;
+            Function* function = ssa_evaluate_function(callee);
+            assert(function != NULL);
+
+            u32 parameters_count = function->parameter_count;
+            SSA** arguments = alloc(sizeof(SSA*) * parameters_count);
+            for (u32 i = 0; i < ssa->data.call_setup.arguments_count; i++) {
+                SSA* argument = ssa->data.call_setup.arguments[i];
+                arguments[i] = argument;
+            }
+
+            Function_Context* function_context = alloc(sizeof(Function_Context));
+            function_context->arguments = arguments;
+            function_context->parameters = function->parameters;
+            function_context->parameters_count = parameters_count;
+            function_context->return_type = function->return_type;
+
+            All_Function_Context all = {0};
+            all.function_context = function_context;
+
+            bool res = ssa_infer_arguments(arguments, function->parameters, parameters_count, &function->setup_block, all, ssa);
+            if (!res) return NULL;
+
+            Function_Context** function_context_ptr = alloc(sizeof(Function_Context*));
+            *function_context_ptr = function_context;
+            return function_context_ptr;
+        }
+        case SSA_Kind_Call: {
+            SSA* setup = ssa->data.call.setup;
+            SSA* callee = setup->data.call.setup;
+            Function_Context* function_context = ssa_evaluate_function_context(setup);
+            assert(function_context != NULL);
+            Function* function = ssa_evaluate_function(callee);
+            assert(function != NULL);
+            void* res = NULL;
+            All_Function_Context all = {0};
+            all.function_context = function_context;
+            ssa_push_function_context(all);
+            switch (function->kind) {
+                case Function_Kind_Invalid: {
+                    internal_compiler_error();
+                }
+                case Function_Kind_Internal: {
+                    assert(false);
+                }
+                case Function_Kind_Intrinsic: {
+                    switch (function->data.intrinsic.kind) {
+                        case Intrinsic_Function_Kind_Invalid: {
+                            internal_compiler_error();
+                        }
+                        case Intrinsic_Function_Int_Type: {
+                            SSA* bits_parameter = function_context->parameters[0];
+                            void* bits_value = ssa_evaluate(bits_parameter);
+                            assert(bits_value != NULL);
+                            Type* bits_parameter_type = ssa_type(bits_parameter);
+                            assert(bits_parameter_type != NULL);
+
+                            Type i64_type = {0};
+                            i64_type.kind = Type_Kind_Int;
+                            i64_type.data.int_.bits = 64;
+                            i64 bits = *(i64*)ssa_cast_value(bits_value, bits_parameter_type, &i64_type);
+
+                            Type* int_type = alloc(sizeof(Type));
+                            int_type->kind = Type_Kind_Int;
+                            int_type->data.int_.bits = bits;
+                            res = int_type;
+                            break;
+                        }
+                        case Intrinsic_Function_Uint_Type: {
+                            SSA* bits_parameter = function_context->parameters[0];
+                            void* bits_value = ssa_evaluate(bits_parameter);
+                            assert(bits_value != NULL);
+                            Type* bits_parameter_type = ssa_type(bits_parameter);
+                            assert(bits_parameter_type != NULL);
+
+                            Type i64_type = {0};
+                            i64_type.kind = Type_Kind_Int;
+                            i64_type.data.int_.bits = 64;
+                            i64 bits = *(i64*)ssa_cast_value(bits_value, bits_parameter_type, &i64_type);
+
+                            Type* uint_type = alloc(sizeof(Type));
+                            uint_type->kind = Type_Kind_Uint;
+                            uint_type->data.uint.bits = bits;
+                            res = uint_type;
+                            break;
+                        }
+                        case Intrinsic_Function_Float_Type: {
+                            SSA* bits_parameter = function_context->parameters[0];
+                            void* bits_value = ssa_evaluate(bits_parameter);
+                            assert(bits_value != NULL);
+                            Type* bits_parameter_type = ssa_type(bits_parameter);
+                            assert(bits_parameter_type != NULL);
+
+                            Type i64_type = {0};
+                            i64_type.kind = Type_Kind_Int;
+                            i64_type.data.int_.bits = 64;
+                            i64 bits = *(i64*)ssa_cast_value(bits_value, bits_parameter_type, &i64_type);
+
+                            Type* float_type = alloc(sizeof(Type));
+                            float_type->kind = Type_Kind_Float;
+                            float_type->data.float_.bits = bits;
+                            res = float_type;
+                            break;
+                        }
+                        case Intrinsic_Function_Kind_Compile_To_LLVM_IR: {
+                            SSA* main_function_ssa = function_context->parameters[0];
+
+                            Function* main_function = ssa_evaluate_function(main_function_ssa);
+
+                            All_Function_Context all = {0};
+                            Function_Context main_function_context = {0};
+                            main_function_context.return_type = main_function->return_type;
+                            assert(main_function->parameter_count == 0);
+                            all.function_context = &main_function_context;
+                            ssa_push_function_context(all);
+                            SSA_Block* function_setup_block = &main_function->setup_block;
+
+                            Interpreter_Function_Context* global_inter_function_context = ssa_clear_interpreter_from_global_context();
+                            if (ssa_type_check_block(function_setup_block)) {
+                                SSA_Block* body_block = &main_function->data.internal.body;
+                                if (ssa_type_check_block(body_block)) {
+                                    utf8 buffer = {0};
+                                    buffer.data = alloc(1024);
+                                    buffer.count = 0;
+                                    u32 buffer_capacity = 1024;
+                                    utf8 global_scope = llvm_global_scope_to_llvm(&buffer, &buffer_capacity);
+                                    utf8_append_with_capacity(&buffer, &buffer_capacity, utf8_str("define internal i32 @__cap_main__() {\n"));
+                                    SSA_Block* body = &main_function->data.internal.body;
+                                    llvm_block_to_llvm(body, &buffer, &buffer_capacity);
+                                    utf8_append_with_capacity(&buffer, &buffer_capacity, utf8_str("}"));
+
+                                    printf("%.*s\n", utf8_fmt(buffer));
+                                    printf("--------------------------------\n");
+                                    printf("------    Running Clang   ------\n");
+                                    printf("--------------------------------\n");
+                                    FILE* clang_proc = popen("clang -x ir - -o test.exe", "w");
+                                    fprintf(clang_proc, "%.*s", utf8_fmt(buffer));
+                                    pclose(clang_proc);
+                                    printf("--------------------------------\n");
+                                    printf("------ Done Running Clang ------\n");
+                                    printf("--------------------------------\n");
+                                } else {
+                                    log_msg_ssa("Failed to type check body block", log_info, function_context->arguments[0]);
+                                }
+                            } else {
+                                log_msg_ssa("Failed to type check function setup block", log_info, function_context->arguments[0]);
+                            }
+                            ssa_add_interpreter_to_global_context(global_inter_function_context);
+                            ssa_pop_function_context();
+                            res = SSA_SUCCESS_VOID_VALUE;
+                            break;
+                        }
+                    }
+                }
+            }
+            ssa_pop_function_context();
+            return res;
+        }
+        case SSA_Kind_Call_Return_Type: {
+            SSA* call_setup = ssa->data.call_return_type.setup;
+            Function_Context* function_context = ssa_evaluate_function_context(call_setup);
+            assert(function_context != NULL);
+            All_Function_Context all = {0};
+            all.function_context = function_context;
+            ssa_push_function_context(all);
+            Type* return_type = ssa_evaluate_type(function_context->return_type);
+            ssa_pop_function_context();
+            return return_type;
+        }
+        case SSA_Kind_Pointer_Type: {
+            Type* pointer_of_type = ssa_evaluate_type(ssa->data.pointer_type.type);
+            assert(pointer_of_type != NULL);
+            Type* type = alloc(sizeof(Type));
+            type->kind = Type_Kind_Ptr;
+            type->data.ptr.type = pointer_of_type;
+            ssa_type_init_allocator(type);
+            return type;
+        }
+        case SSA_Kind_Underlying_Type: {
+            Type* ptr_type = ssa_evaluate_type(ssa->data.underlying_type.type);
+            assert(ptr_type != NULL);
+            assert(ptr_type->kind == Type_Kind_Ptr);
+            return ptr_type->data.ptr.type;
+        }
+        case SSA_Kind_Default_Value: {
+            assert(false);
+        }
+        case SSA_Kind_Struct_Type: {
+            assert(false);
+        }
+        case SSA_Kind_Struct_Value: {
+            assert(false);
+        }
+        case SSA_Kind_Struct_Index_Number: {
+            assert(false);
+        }
+        case SSA_Kind_Struct_Type_Index_Number: {
+            assert(false);
+        }
+        case SSA_Kind_Struct_Index_Name: {
+            assert(false);
+        }
+        case SSA_Kind_Struct_Type_Index_Name: {
+            assert(false);
+        }
+    }
+    return NULL;
+}
+
+void* ssa_evaluate(SSA* ssa) {
+    bool type_check_res;
+    if (!ssa_already_type_checked(ssa, &type_check_res)) internal_compiler_error();
+    if (!type_check_res) return NULL;
+
+    void* res = NULL;
+    if (ssa_already_evaluated(ssa, &res)) return res;
+
+    res = _ssa_evaluate(ssa);
+    if (res != NULL) {
+        log_msg_ssa("Evaluation succeeded", log_debug, ssa);
+    } else {
+        log_msg_ssa("Evaluation failed", log_info, ssa);
+    }
+
+    if (!ssa_running_interpreter()) {
+        ssa_cache_evaluated(ssa, res);
+    }
+
+    return res;
+}
+
+bool ssa_already_evaluated(SSA* ssa, void** out_value) {
+    Function_Context* function_context = ssa_get_cache_function_context(ssa);
+    for (u32 i = 0; i < ssa->ssa_per_function_context_values_count; i++) {
+        SSA_Per_Function_Context_Values* per_function_context_values = ssa->ssa_per_function_context_values + i;
+        if (per_function_context_values->function_context == function_context) {
+            *out_value = per_function_context_values->value;
+            return per_function_context_values->evaluated_value;
+        }
+    }
+    return false;
+}
+
+void ssa_cache_evaluated(SSA* ssa, void* value) {
+    Function_Context* function_context = ssa_get_cache_function_context(ssa);
+    for (u32 i = 0; i < ssa->ssa_per_function_context_values_count; i++) {
+        SSA_Per_Function_Context_Values* per_function_context_values = ssa->ssa_per_function_context_values + i;
+        if (per_function_context_values->function_context == function_context) {
+            per_function_context_values->value = value;
+            per_function_context_values->evaluated_value = true;
+            return;
+        }
+    }
+    internal_compiler_error();  // expect that per function context values are init because of type check
+}
+
+static bool _ssa_run(SSA* ssa) {
+    switch (ssa->kind) {
+        case SSA_Kind_Invalid: {
+            internal_compiler_error();
+        }
+        case SSA_Kind_Store: {
+            SSA* address = ssa->data.store.address;
+            void* memory = ssa_evaluate(address);
+            if (memory == NULL) return false;
+            Type* value_type = ssa_type(ssa->data.store.value);
+            if (value_type == NULL) return false;
+            i64 value_size = ssa_type_size_compile_time(value_type);
+            void* value = ssa_evaluate(ssa->data.store.value);
+            if (value == NULL) return false;
+            memcpy(*(void**)memory, value, value_size);
+            return true;
+        }
+        case SSA_Kind_Stack_Alloc: {
+            void* memory = ssa_evaluate(ssa);
+            if (memory == NULL) return false;
+            Type* type = ssa_evaluate_type(ssa->data.stack_alloc.type);
+            if (type == NULL) return false;
+            i64 size = ssa_type_size_compile_time(type);
+            void* value = ssa_evaluate(ssa->data.stack_alloc.initial_value);
+            if (value == NULL) return false;
+            memcpy(*(void**)memory, value, size);
+            return true;
+        }
+        case SSA_Kind_Return: {
+            assert(false);
+        }
+        case SSA_Kind_Load:
+        case SSA_Kind_Function_Type:
+        case SSA_Kind_Type_Type:
+        case SSA_Kind_Function_Declaration:
+        case SSA_Kind_Parameter:
+        case SSA_Kind_Parameter_Type:
+        case SSA_Kind_Argument:
+        case SSA_Kind_Argument_Type:
+        case SSA_Kind_Int_Literal_Type:
+        case SSA_Kind_Int_Literal:
+        case SSA_Kind_Float_Literal_Type:
+        case SSA_Kind_Float_Literal:
+        case SSA_Kind_Return_Type:
+        case SSA_Kind_Implicit_Cast:
+        case SSA_Kind_Explicit_Cast:
+        case SSA_Kind_Int_Type:
+        case SSA_Kind_Uint_Type:
+        case SSA_Kind_Float_Type:
+        case SSA_Kind_Void_Type:
+        case SSA_Kind_Compile_To_LLVM_IR:
+        case SSA_Kind_Build:
+        case SSA_Kind_Call_Setup:
+        case SSA_Kind_Call_Setup_Type:
+        case SSA_Kind_Call:
+        case SSA_Kind_Call_Return_Type:
+        case SSA_Kind_Pointer_Type:
+        case SSA_Kind_Underlying_Type:
+        case SSA_Kind_Default_Value:
+        case SSA_Kind_Struct_Type:
+        case SSA_Kind_Struct_Value:
+        case SSA_Kind_Struct_Index_Number:
+        case SSA_Kind_Struct_Type_Index_Number:
+        case SSA_Kind_Struct_Index_Name:
+        case SSA_Kind_Struct_Type_Index_Name: {
+            void* value = ssa_evaluate(ssa);
+            if (value == NULL) return false;
+            return true;
+        }
+    }
+}
+
+bool ssa_run(SSA* ssa) {
+    bool res = _ssa_run(ssa);
+    if (res) {
+        log_msg_ssa("Run succeeded", log_debug, ssa);
+    } else {
+        log_msg_ssa("Run failed", log_info, ssa);
+    }
+    return res;
+}
+
+bool ssa_run_block(SSA_Block* block) {
+    ssa_add_interpreter_to_function_context();
+    All_Function_Context all_function_context = ssa_get_function_context();
+    Interpreter_Function_Context* inter_function_context = all_function_context.interpreter_function_context;
+
+    for (u32 i = 0; i < block->statement_lists_count; i++) {
+        SSA_List* list = block->statement_lists + i;
+        for (u32 j = 0; j < list->statements_count; j++) {
+            SSA* ssa = list->statements + j;
+            switch (ssa->kind) {
+                case SSA_Kind_Stack_Alloc: {
+                    SSA* type_ssa = ssa->data.stack_alloc.type;
+                    Type* type = ssa_evaluate_type(type_ssa);
+                    i64 size = ssa_type_size_compile_time(type);
+                    void* mem = alloc(size);
+                    Interpreter_Stack_Alloc_Pair pair = {ssa, mem};
+                    ptr_append(inter_function_context->stack_alloc_memory_map, inter_function_context->stack_alloc_memory_map_count,
+                               inter_function_context->stack_alloc_memory_map_capacity, pair);
+                    break;
+                }
+                default: {
+                    break;
+                }
+            }
+        }
+    }
+
+    for (u32 i = 0; i < block->statement_lists_count; i++) {
+        SSA_List* list = block->statement_lists + i;
+        for (u32 j = 0; j < block->statement_lists[i].statements_count; j++) {
+            SSA* ssa = list->statements + j;
+            ssa_run(ssa);
+        }
+    }
+    return true;
+}
+
+bool ssa_run_builds() {
+    for (u32 i = 0; i < context.global_block.statement_lists_count; i++) {
+        SSA_List* list = context.global_block.statement_lists + i;
+        for (u32 j = 0; j < list->statements_count; j++) {
+            SSA* ssa = list->statements + j;
+            if (ssa->kind == SSA_Kind_Build) {
+                SSA_Build* build = &ssa->data.build;
+                Function_Context* function_context = build->function_context;
+                All_Function_Context all = {0};
+                all.function_context = function_context;
+                ssa_push_function_context(all);
+                bool res = ssa_run_block(&build->block);
+                ssa_pop_function_context();
+                if (!res) return false;
+            }
+        }
+    }
+    return true;
+}
+
 SSA* ssa_function_declaration_ast_prototype(Ast* ast, SSA_Block* block) {
     SSA* function_type = ssa_function_type();
-    SSA* function_memory = ssa_stack_alloc(function_type, block, ast);
     SSA* function_declaration = ssa_function_declaration(block, ast);
-    SSA* store = ssa_store(function_declaration, function_memory, block, ast);
+    SSA* function_memory = ssa_stack_alloc(function_type, function_declaration, block, ast);
     ast->data.function_declaration.value = function_memory;
 
     Function* function = &function_declaration->data.function_declaration.function;
@@ -1134,47 +1595,35 @@ SSA* ssa_function_declaration_ast_prototype(Ast* ast, SSA_Block* block) {
     function->setup_block.kind = SSA_Block_Kind_Function_Setup;
 
     Ast* parameter_list = ast->data.function_declaration.parameter_list;
-    u32 parameter_types_count = parameter_list->data.parameter_list.parameters_count;
+    u32 parameter_count = parameter_list->data.parameter_list.parameters_count;
 
-    SSA** parameter_types = alloc(sizeof(SSA*) * parameter_types_count);
-    SSA** parameters = alloc(sizeof(SSA*) * parameter_types_count);
-    for (u32 i = 0; i < parameter_types_count; i++) {
+    SSA** parameters = alloc(sizeof(SSA*) * parameter_count);
+    for (u32 i = 0; i < parameter_count; i++) {
         Ast* parameter = parameter_list->data.parameter_list.parameter_semantic_parse_order[i];
         u32 parameter_index = parameter - parameter_list->data.parameter_list.parameters;
         assert(parameter->kind == Ast_Kind_Parameter);
         Ast* type = parameter->data.parameter.type;
-        SSA* type_ssa = ssa_ast_to_ssa(type, &function->setup_block);
-        SSA* loaded_type_ssa = ssa_load(type_ssa, &function->setup_block, type);
-        parameter_types[parameter_index] = loaded_type_ssa;
+        SSA* type_ssa = ssa_ast_to_ssa_non_ref(type, &function->setup_block);
         SSA* argument = ssa_argument(parameter_index, &function->setup_block, parameter);
-        SSA* casted_argument = ssa_implicit_cast(argument, loaded_type_ssa, &function->setup_block, parameter);
+        SSA* casted_argument = ssa_implicit_cast(argument, type_ssa, &function->setup_block, parameter);
         parameter->data.parameter.value = casted_argument;
         parameters[parameter_index] = casted_argument;
     }
     function->parameters = parameters;
-    function->parameter_types = parameter_types;
-    function->parameter_types_count = parameter_types_count;
-
-    for (u32 i = 0; i < parameter_types_count; i++) {
-        Ast* parameter = parameter_list->data.parameter_list.parameters + i;
-        SSA* argument = parameter->data.parameter.value;
-        SSA* parameter_type = parameter_types[i];
-        ssa_implicit_cast(argument, parameter_type, &function->setup_block, parameter);
-    }
+    function->parameter_count = parameter_count;
 
     u32 return_types_count = ast->data.function_declaration.return_types_count;
     SSA** return_types = alloc(sizeof(SSA*) * return_types_count);
     for (u32 i = 0; i < return_types_count; i++) {
         Ast* return_type = ast->data.function_declaration.return_types + i;
-        SSA* return_type_ssa = ssa_ast_to_ssa(return_type, &function->setup_block);
-        SSA* loaded_type_ssa = ssa_load(return_type_ssa, &function->setup_block, return_type);
-        return_types[i] = loaded_type_ssa;
+        SSA* return_type_ssa = ssa_ast_to_ssa_non_ref(return_type, &function->setup_block);
+        return_types[i] = return_type_ssa;
     }
     SSA* return_type = NULL;
     if (return_types_count == 1) {
         return_type = return_types[0];
     } else {
-        return_type = ssa_multi_value(return_types, return_types_count, &function->setup_block, NULL);
+        return_type = ssa_no_field_name_struct_type(return_types, return_types_count, &function->setup_block, NULL);
     }
     function->return_type = return_type;
 
@@ -1194,7 +1643,8 @@ void ssa_function_declaration_ast_implement(SSA* ssa, SSA_Block* block) {
     for (u32 i = 0; i < parameter_types_count; i++) {
         Ast* parameter = parameter_list->data.parameter_list.parameters + i;
         assert(parameter->kind == Ast_Kind_Parameter);
-        parameter->data.parameter.value = ssa_parameter(i, body_block, parameter);
+        SSA* parameter_ssa = ssa_parameter(i, body_block, parameter);
+        parameter->data.parameter.value = ssa_stack_alloc(parameter_ssa->type, parameter_ssa, body_block, parameter);
     }
 
     ssa_build_scope(scope, body_block);
@@ -1209,19 +1659,24 @@ void ssa_build_ast_implement(SSA* ssa, SSA_Block* block) {
     assert(ast->kind == Ast_Kind_Build);
     Ast* scope = ast->data.build.scope;
     SSA_Block* build_body = &ssa->data.build.block;
-    build_body->kind = SSA_Block_Kind_Scope;
+    build_body->kind = SSA_Block_Kind_Function;
 
-    SSA_Block* global_block = &context.global_block;
-    ptr_append(build_body->branchs_to_this_block, build_body->branchs_to_this_block_count, build_body->branchs_to_this_block_capacity, global_block);
+    Function_Context* function_context = alloc(sizeof(Function_Context));
+    ssa->data.build.function_context = function_context;
 
+    All_Function_Context all = {0};
+    all.function_context = function_context;
+    ssa_push_function_context(all);
     ssa_build_scope(scope, build_body);
+    ssa_pop_function_context();
 }
 
-SSA* ssa_stack_alloc(SSA* type, SSA_Block* block, Ast* ast) {
+SSA* ssa_stack_alloc(SSA* type, SSA* initial_value, SSA_Block* block, Ast* ast) {
     SSA ssa = {0};
     ssa.kind = SSA_Kind_Stack_Alloc;
     ssa.ast = ast;
     ssa.data.stack_alloc.type = type;
+    ssa.data.stack_alloc.initial_value = initial_value;
     ssa.type = ssa_pointer_type(type, block, ast);
     return ssa_add_to_block(ssa, block);
 }
@@ -1233,7 +1688,14 @@ SSA* ssa_store(SSA* value, SSA* address, SSA_Block* block, Ast* ast) {
     ssa.data.store.value = value;
     ssa.data.store.address = address;
     ssa.type = ssa_void_type();
-    return ssa_add_to_block(ssa, block);
+    SSA* ssa_ptr = ssa_add_to_block(ssa, block);
+    if (address->kind == SSA_Kind_Stack_Alloc && address->data.stack_alloc.lost_const_at == NULL) address->data.stack_alloc.lost_const_at = ssa_ptr;
+    return ssa_ptr;
+}
+
+SSA* ssa_load_if_ref(SSA* value, SSA_Block* block, Ast* ast) {
+    if (ssa_is_ref(value)) return ssa_load(value, block, ast);
+    return value;
 }
 
 SSA* ssa_load(SSA* address, SSA_Block* block, Ast* ast) {
@@ -1242,23 +1704,6 @@ SSA* ssa_load(SSA* address, SSA_Block* block, Ast* ast) {
     ssa.ast = ast;
     ssa.data.load.address = address;
     ssa.type = ssa_underlying_type(address->type, block, ast);
-    return ssa_add_to_block(ssa, block);
-}
-
-SSA* ssa_multi_value(SSA** values, u32 values_count, SSA_Block* block, Ast* ast) {
-    SSA ssa = {0};
-    ssa.kind = SSA_Kind_Multi_Value;
-    ssa.ast = ast;
-    ssa.data.multi_value.values = values;
-    ssa.data.multi_value.values_count = values_count;
-
-    SSA** types = alloc(sizeof(SSA*) * values_count);
-    for (u32 i = 0; i < values_count; i++) {
-        SSA* value = values[i];
-        types[i] = value->type;
-    }
-    ssa.type = ssa_multi_type(types, values_count, block, ast);
-
     return ssa_add_to_block(ssa, block);
 }
 
@@ -1343,26 +1788,6 @@ SSA* ssa_explicit_cast(SSA* value, SSA* type, SSA_Block* block, Ast* ast) {
     return ssa_add_to_block(ssa, block);
 }
 
-SSA* ssa_index_multi_value(SSA* multi_value, u32 index, SSA_Block* block, Ast* ast) {
-    SSA ssa = {0};
-    ssa.kind = SSA_Kind_Index_Multi_Value;
-    ssa.ast = ast;
-    ssa.data.index_multi_value.multi_value = multi_value;
-    ssa.data.index_multi_value.index = index;
-    ssa.type = ssa_index_multi_type(multi_value->type, index, block, ast);
-    return ssa_add_to_block(ssa, block);
-}
-
-SSA* ssa_index_multi_type(SSA* multi_type, u32 index, SSA_Block* block, Ast* ast) {
-    SSA ssa = {0};
-    ssa.kind = SSA_Kind_Index_Multi_Type;
-    ssa.ast = ast;
-    ssa.data.index_multi_type.multi_type = multi_type;
-    ssa.data.index_multi_type.index = index;
-    ssa.type = ssa_type_type();
-    return ssa_add_to_block(ssa, block);
-}
-
 SSA* ssa_build(SSA_Block* block, Ast* ast) {
     SSA ssa = {0};
     ssa.kind = SSA_Kind_Build;
@@ -1422,16 +1847,6 @@ SSA* ssa_underlying_type(SSA* type, SSA_Block* block, Ast* ast) {
     return ssa_add_to_block(ssa, block);
 }
 
-SSA* ssa_multi_type(SSA** types, u32 types_count, SSA_Block* block, Ast* ast) {
-    SSA ssa = {0};
-    ssa.kind = SSA_Kind_Multi_Type;
-    ssa.ast = ast;
-    ssa.data.multi_type.types = types;
-    ssa.data.multi_type.types_count = types_count;
-    ssa.type = ssa_type_type();
-    return ssa_add_to_block(ssa, block);
-}
-
 SSA* ssa_argument_type(u32 index, SSA_Block* block, Ast* ast) {
     SSA ssa = {0};
     ssa.kind = SSA_Kind_Argument_Type;
@@ -1456,6 +1871,84 @@ SSA* ssa_default_value(SSA* type, SSA_Block* block, Ast* ast) {
     ssa.ast = ast;
     ssa.data.default_value.type = type;
     ssa.type = type;
+    return ssa_add_to_block(ssa, block);
+}
+
+SSA* ssa_no_field_name_struct_type(SSA** types, u32 types_count, SSA_Block* block, Ast* ast) {
+    SSA ssa = {0};
+    ssa.kind = SSA_Kind_Struct_Type;
+    ssa.ast = ast;
+    ssa.data.struct_type.field_types = types;
+    utf8* type_names = alloc(sizeof(utf8) * types_count);
+    ssa.data.struct_type.field_names = type_names;
+    ssa.data.struct_type.field_count = types_count;
+    ssa.type = ssa_type_type();
+    return ssa_add_to_block(ssa, block);
+}
+
+SSA* ssa_struct_type(SSA** types, utf8* type_names, u32 types_count, SSA_Block* block, Ast* ast) {
+    SSA ssa = {0};
+    ssa.kind = SSA_Kind_Struct_Type;
+    ssa.ast = ast;
+    ssa.data.struct_type.field_types = types;
+    ssa.data.struct_type.field_names = type_names;
+    ssa.data.struct_type.field_count = types_count;
+    ssa.type = ssa_type_type();
+    return ssa_add_to_block(ssa, block);
+}
+
+SSA* ssa_struct_value(SSA** values, u32 values_count, SSA_Block* block, Ast* ast) {
+    SSA ssa = {0};
+    ssa.kind = SSA_Kind_Struct_Value;
+    ssa.ast = ast;
+    ssa.data.struct_value.field_values = values;
+    ssa.data.struct_value.field_count = values_count;
+    SSA** field_types = alloc(sizeof(SSA*) * values_count);
+    for (u32 i = 0; i < values_count; i++) {
+        SSA* value = values[i];
+        field_types[i] = value->type;
+    }
+    ssa.type = ssa_no_field_name_struct_type(field_types, values_count, block, ast);
+    return ssa_add_to_block(ssa, block);
+}
+
+SSA* ssa_struct_index_number(SSA* struct_value, u32 index, SSA_Block* block, Ast* ast) {
+    SSA ssa = {0};
+    ssa.kind = SSA_Kind_Struct_Index_Number;
+    ssa.ast = ast;
+    ssa.data.struct_index_number.struct_value = struct_value;
+    ssa.data.struct_index_number.index = index;
+    ssa.type = ssa_struct_type_index_number(struct_value->type, index, block, ast);
+    return ssa_add_to_block(ssa, block);
+}
+
+SSA* ssa_struct_type_index_number(SSA* struct_type, u32 index, SSA_Block* block, Ast* ast) {
+    SSA ssa = {0};
+    ssa.kind = SSA_Kind_Struct_Type_Index_Number;
+    ssa.ast = ast;
+    ssa.data.struct_type_index_number.struct_type = struct_type;
+    ssa.data.struct_type_index_number.index = index;
+    ssa.type = ssa_type_type();
+    return ssa_add_to_block(ssa, block);
+}
+
+SSA* ssa_struct_index_name(SSA* struct_value, utf8 index_name, SSA_Block* block, Ast* ast) {
+    SSA ssa = {0};
+    ssa.kind = SSA_Kind_Struct_Index_Name;
+    ssa.ast = ast;
+    ssa.data.struct_index_name.struct_value = struct_value;
+    ssa.data.struct_index_name.index_name = index_name;
+    ssa.type = ssa_struct_type_index_name(struct_value->type, index_name, block, ast);
+    return ssa_add_to_block(ssa, block);
+}
+
+SSA* ssa_struct_type_index_name(SSA* struct_type, utf8 index_name, SSA_Block* block, Ast* ast) {
+    SSA ssa = {0};
+    ssa.kind = SSA_Kind_Struct_Type_Index_Name;
+    ssa.ast = ast;
+    ssa.data.struct_type_index_name.struct_type = struct_type;
+    ssa.data.struct_type_index_name.index_name = index_name;
+    ssa.type = ssa_type_type();
     return ssa_add_to_block(ssa, block);
 }
 
@@ -1543,45 +2036,6 @@ void ssa_build_scope(Ast* ast, SSA_Block* block) {
     }
 }
 
-void* ssa_interpreter_call_function() {
-    alkfdj;
-}
-
-void ssa_interpreter_block(SSA_Block* block, SSA_Interpreter_Context* interpreter_context) {
-    asldfkj;
-}
-
-void* ssa_interpreter_ssa(SSA* ssa, SSA_Interpreter_Context* interpreter_context) {
-    asfjdk;
-    if (ssa->kind == SSA_Kind_Load) {
-        SSA* address = ssa->data.load.address;
-        Pointer_Providence* providence = ssa_interpreter_ssa(address, interpreter_context);
-        if (providence == NULL) return NULL;
-        for (u32 i = 0; i < interpreter_context->value_map_count; i++) {
-            SSA_Interpreter_Value_Map_Pair* pair = interpreter_context->value_map + i;
-            if (pair->providence.providence == providence->providence) {
-                return pair->value;
-            }
-        }
-        return ssa_evaluate(ssa);
-    } else if (ssa->kind == SSA_Kind_Store) {
-        SSA* value_ssa = ssa->data.store.value;
-        void* value = ssa_interpreter_ssa(value_ssa, interpreter_context);
-        if (value == NULL) return NULL;
-        SSA* address = ssa->data.store.address;
-        Pointer_Providence* providence = ssa_interpreter_ssa(address, interpreter_context);
-        if (providence == NULL) return NULL;
-
-        SSA_Interpreter_Value_Map_Pair pair = {0};
-        pair.providence = *providence;
-        pair.value = value;
-        ptr_append(interpreter_context->value_map, interpreter_context->value_map_count, interpreter_context->value_map_capacity, pair);
-        return SSA_SUCCESS_VOID_VALUE;
-    } else {
-        return ssa_evaluate(ssa);
-    }
-}
-
 utf8 ssa_get_ssa_block_name(SSA_Block* block) {
     typedef struct SSA_Block_Name_Ptr_Pair {
         SSA_Block* block;
@@ -1646,6 +2100,8 @@ utf8 ssa_get_ssa_name(SSA* ssa) {
             return utf8_str("\x1b[94mVoid_Type\033[0m");
         case SSA_Kind_Compile_To_LLVM_IR:
             return utf8_str("\x1b[94mCompile_To_LLVM_IR\033[0m");
+        case SSA_Kind_Call_Setup_Type:
+            return utf8_str("\x1b[94mCall_Setup_Type\033[0m");
         default:
             break;
     }
@@ -1768,23 +2224,23 @@ utf8 ssa_recursive_get_block_strings(SSA_Block* block) {
     str.data = new_utf8_memory;
     str.count = 0;
     for (u32 i = 0; i < block_strings_count; i++) {
-        utf8_append_with_capacity(&str, new_utf8_count, block_strings[i]);
-        utf8_append_with_capacity(&str, new_utf8_count, utf8_str("\n"));
+        utf8_append_with_capacity(&str, &new_utf8_count, block_strings[i]);
+        utf8_append_with_capacity(&str, &new_utf8_count, utf8_str("\n"));
     }
     return str;
 }
 
 utf8 ssa_block_to_string(SSA_Block* block) {
-    u32 buffer_capacity = 8096;
     char buffer[8096] = {0};
+    u32 buffer_capacity = arr_len(buffer);
     utf8 buffer_utf8 = {0};
     buffer_utf8.data = buffer;
     buffer_utf8.count = 0;
     // char* buffer = alloc(buffer_capacity);
 
     utf8 block_name = ssa_get_ssa_block_name(block);
-    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, block_name);
-    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(":\n"));
+    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, block_name);
+    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(":\n"));
 
     for (u32 i = 0; i < block->statement_lists_count; i++) {
         SSA_List* list = block->statement_lists + i;
@@ -1792,19 +2248,19 @@ utf8 ssa_block_to_string(SSA_Block* block) {
             SSA* ssa = list->statements + j;
             utf8 ssa_name = ssa_get_ssa_name(ssa);
             utf8 ssa_type_name = ssa_get_ssa_name(ssa->type);
-            utf8_append_with_capacity(&buffer_utf8, buffer_capacity, ssa_type_name);
+            utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, ssa_type_name);
 
             u32 type_padding = 18;
             u32 current_padding = utf8_visual_len(ssa_type_name);
             for (u32 k = current_padding; k < type_padding; k++) {
-                utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(" "));
+                utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(" "));
             }
 
-            utf8_append_with_capacity(&buffer_utf8, buffer_capacity, ssa_name);
-            utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(": "));
+            utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, ssa_name);
+            utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(": "));
             switch (ssa->kind) {
                 case SSA_Kind_Invalid: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Invalid"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Invalid"));
                     break;
                 }
                 case SSA_Kind_Store: {
@@ -1812,33 +2268,44 @@ utf8 ssa_block_to_string(SSA_Block* block) {
                     utf8 value_name = ssa_get_ssa_name(value);
                     SSA* address = ssa->data.store.address;
                     utf8 address_name = ssa_get_ssa_name(address);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Store: (Value: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, value_name);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(", Memory: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, address_name);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(")"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Store: (Value: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, value_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(", Memory: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, address_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(")"));
                     break;
                 }
                 case SSA_Kind_Load: {
                     SSA* address = ssa->data.load.address;
                     utf8 address_name = ssa_get_ssa_name(address);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Load: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, address_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Load: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, address_name);
                     break;
                 }
                 case SSA_Kind_Stack_Alloc: {
                     SSA* type = ssa->data.stack_alloc.type;
                     utf8 type_name = ssa_get_ssa_name(type);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Stack_Alloc: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, type_name);
+                    SSA* initial_value = ssa->data.stack_alloc.initial_value;
+                    utf8 initial_value_name = ssa_get_ssa_name(initial_value);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Stack_Alloc(Type: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, type_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(", Initial_Value: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, initial_value_name);
+                    if (ssa->data.stack_alloc.lost_const_at != NULL) {
+                        SSA* lost_const_at = ssa->data.stack_alloc.lost_const_at;
+                        utf8 lost_const_at_name = ssa_get_ssa_name(lost_const_at);
+                        utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(", Lost_Const_At: "));
+                        utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, lost_const_at_name);
+                    }
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(")"));
                     break;
                 }
                 case SSA_Kind_Function_Type: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Function_Type"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Function_Type"));
                     break;
                 }
                 case SSA_Kind_Type_Type: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Type_Type"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Type_Type"));
                     break;
                 }
                 case SSA_Kind_Function_Declaration: {
@@ -1850,34 +2317,13 @@ utf8 ssa_block_to_string(SSA_Block* block) {
                     SSA_Block* function_body_block = &ssa->data.function_declaration.function.data.internal.body;
                     utf8 function_body_block_name = ssa_get_ssa_block_name(function_body_block);
 
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Function_Declaration "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, function_name);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(": (Setup: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, setup_block_name);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(", Body: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, function_body_block_name);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(")"));
-                    break;
-                }
-                case SSA_Kind_Multi_Value: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Multi_Value: "));
-                    for (u32 i = 0; i < ssa->data.multi_value.values_count; i++) {
-                        SSA* value = ssa->data.multi_value.values[i];
-                        utf8 value_name = ssa_get_ssa_name(value);
-                        utf8_append_with_capacity(&buffer_utf8, buffer_capacity, value_name);
-                        if (i != ssa->data.multi_value.values_count - 1) {
-                            utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(", "));
-                        }
-                    }
-                    break;
-                }
-                case SSA_Kind_Index_Multi_Value: {
-                    u32 index = ssa->data.index_multi_value.index;
-                    char index_buf[32];
-                    snprintf(index_buf, 32, "%u", index);
-                    utf8 index_utf8 = {index_buf, strlen(index_buf)};
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Index_Multi_Value: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, index_utf8);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Function_Declaration "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, function_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(": (Setup: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, setup_block_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(", Body: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, function_body_block_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(")"));
                     break;
                 }
                 case SSA_Kind_Parameter: {
@@ -1885,8 +2331,8 @@ utf8 ssa_block_to_string(SSA_Block* block) {
                     char index_buf[32];
                     snprintf(index_buf, 32, "%u", index);
                     utf8 index_utf8 = {index_buf, strlen(index_buf)};
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Parameter: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, index_utf8);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Parameter: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, index_utf8);
                     break;
                 }
                 case SSA_Kind_Argument: {
@@ -1894,12 +2340,12 @@ utf8 ssa_block_to_string(SSA_Block* block) {
                     char index_buf[32];
                     snprintf(index_buf, 32, "%u", index);
                     utf8 index_utf8 = {index_buf, strlen(index_buf)};
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Argument: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, index_utf8);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Argument: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, index_utf8);
                     break;
                 }
                 case SSA_Kind_Int_Literal_Type: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Int_Literal_Type"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Int_Literal_Type"));
                     break;
                 }
                 case SSA_Kind_Int_Literal: {
@@ -1907,12 +2353,12 @@ utf8 ssa_block_to_string(SSA_Block* block) {
                     char value_buf[32];
                     snprintf(value_buf, 32, "%llu", value.data);
                     utf8 value_utf8 = {value_buf, strlen(value_buf)};
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Int_Literal: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, value_utf8);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Int_Literal: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, value_utf8);
                     break;
                 }
                 case SSA_Kind_Float_Literal_Type: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Float_Literal_Type"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Float_Literal_Type"));
                     break;
                 }
                 case SSA_Kind_Float_Literal: {
@@ -1920,19 +2366,19 @@ utf8 ssa_block_to_string(SSA_Block* block) {
                     char value_buf[32];
                     snprintf(value_buf, 32, "%f", value);
                     utf8 value_utf8 = {value_buf, strlen(value_buf)};
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Float_Literal: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, value_utf8);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Float_Literal: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, value_utf8);
                     break;
                 }
                 case SSA_Kind_Return: {
                     SSA* return_value = ssa->data.return_.return_value;
                     utf8 return_value_name = ssa_get_ssa_name(return_value);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Return: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, return_value_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Return: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, return_value_name);
                     break;
                 }
                 case SSA_Kind_Return_Type: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Return_Type"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Return_Type"));
                     break;
                 }
                 case SSA_Kind_Explicit_Cast: {
@@ -1940,10 +2386,10 @@ utf8 ssa_block_to_string(SSA_Block* block) {
                     SSA* type = ssa->data.explicit_cast.type;
                     utf8 value_name = ssa_get_ssa_name(value);
                     utf8 type_name = ssa_get_ssa_name(type);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Explicit_Cast: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, value_name);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(" -> "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, type_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Explicit_Cast: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, value_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(" -> "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, type_name);
                     break;
                 }
                 case SSA_Kind_Implicit_Cast: {
@@ -1951,39 +2397,39 @@ utf8 ssa_block_to_string(SSA_Block* block) {
                     SSA* type = ssa->data.implicit_cast.type;
                     utf8 value_name = ssa_get_ssa_name(value);
                     utf8 type_name = ssa_get_ssa_name(type);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Implicit_Cast: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, value_name);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(" -> "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, type_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Implicit_Cast: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, value_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(" -> "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, type_name);
                     break;
                 }
                 case SSA_Kind_Int_Type: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Int_Type"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Int_Type"));
                     break;
                 }
                 case SSA_Kind_Uint_Type: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Uint_Type"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Uint_Type"));
                     break;
                 }
                 case SSA_Kind_Float_Type: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Float_Type"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Float_Type"));
                     break;
                 }
                 case SSA_Kind_Void_Type: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Void_Type"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Void_Type"));
                     break;
                 }
                 case SSA_Kind_Compile_To_LLVM_IR: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Compile_To_LLVM_IR"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Compile_To_LLVM_IR"));
                     break;
                 }
                 case SSA_Kind_Build: {
                     SSA_Block* build_block = &ssa->data.build.block;
                     utf8 build_block_name = ssa_get_ssa_block_name(build_block);
 
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Build("));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, build_block_name);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(")"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Build("));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, build_block_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(")"));
                     break;
                 }
                 case SSA_Kind_Call_Setup: {
@@ -1991,55 +2437,25 @@ utf8 ssa_block_to_string(SSA_Block* block) {
                     utf8 callee_name = ssa_get_ssa_name(callee);
                     SSA** arguments = ssa->data.call_setup.arguments;
                     u32 arguments_count = ssa->data.call_setup.arguments_count;
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Call_Setup "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, callee_name);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("("));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Call_Setup "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, callee_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("("));
                     for (u32 i = 0; i < arguments_count; i++) {
                         SSA* argument = arguments[i];
                         utf8 argument_name = ssa_get_ssa_name(argument);
-                        utf8_append_with_capacity(&buffer_utf8, buffer_capacity, argument_name);
+                        utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, argument_name);
                         if (i != arguments_count - 1) {
-                            utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(", "));
+                            utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(", "));
                         }
                     }
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(")"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(")"));
                     break;
                 }
                 case SSA_Kind_Call: {
                     SSA* setup = ssa->data.call.setup;
                     utf8 setup_name = ssa_get_ssa_name(setup);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Call: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, setup_name);
-                    break;
-                }
-                case SSA_Kind_Multi_Type: {
-                    SSA** types = ssa->data.multi_type.types;
-                    u32 types_count = ssa->data.multi_type.types_count;
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Multi_Type("));
-                    for (u32 i = 0; i < types_count; i++) {
-                        SSA* type = types[i];
-                        utf8 type_name = ssa_get_ssa_name(type);
-                        utf8_append_with_capacity(&buffer_utf8, buffer_capacity, type_name);
-                        if (i != types_count - 1) {
-                            utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(", "));
-                        }
-                    }
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(")"));
-                    break;
-                }
-                case SSA_Kind_Index_Multi_Type: {
-                    SSA* multi_type = ssa->data.index_multi_type.multi_type;
-                    u32 index = ssa->data.index_multi_type.index;
-                    char index_buf[32];
-                    snprintf(index_buf, 32, "%u", index);
-                    utf8 index_utf8 = {index_buf, strlen(index_buf)};
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Index_Multi_Type(Multi_Type:"));
-                    utf8 multi_type_name = ssa_get_ssa_name(multi_type);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, multi_type_name);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(", "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Index: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, index_utf8);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str(")"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Call: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, setup_name);
                     break;
                 }
                 case SSA_Kind_Parameter_Type: {
@@ -2047,8 +2463,8 @@ utf8 ssa_block_to_string(SSA_Block* block) {
                     char index_buf[32];
                     snprintf(index_buf, 32, "%u", index);
                     utf8 index_utf8 = {index_buf, strlen(index_buf)};
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Parameter_Type: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, index_utf8);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Parameter_Type: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, index_utf8);
                     break;
                 }
                 case SSA_Kind_Argument_Type: {
@@ -2056,45 +2472,131 @@ utf8 ssa_block_to_string(SSA_Block* block) {
                     char index_buf[32];
                     snprintf(index_buf, 32, "%u", index);
                     utf8 index_utf8 = {index_buf, strlen(index_buf)};
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Argument_Type: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, index_utf8);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Argument_Type: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, index_utf8);
                     break;
                 }
                 case SSA_Kind_Call_Setup_Type: {
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Call_Setup_Type"));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Call_Setup_Type"));
                     break;
                 }
                 case SSA_Kind_Call_Return_Type: {
                     SSA* setup = ssa->data.call_return_type.setup;
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Call_Return_Type: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Call_Return_Type: "));
                     utf8 setup_name = ssa_get_ssa_name(setup);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, setup_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, setup_name);
                     break;
                 }
                 case SSA_Kind_Pointer_Type: {
                     SSA* type = ssa->data.pointer_type.type;
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Pointer_Type: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Pointer_Type: "));
                     utf8 type_name = ssa_get_ssa_name(type);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, type_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, type_name);
                     break;
                 }
                 case SSA_Kind_Underlying_Type: {
                     SSA* type = ssa->data.underlying_type.type;
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Underlying_Type: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Underlying_Type: "));
                     utf8 type_name = ssa_get_ssa_name(type);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, type_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, type_name);
                     break;
                 }
                 case SSA_Kind_Default_Value: {
                     SSA* type = ssa->data.default_value.type;
                     utf8 type_name = ssa_get_ssa_name(type);
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("Default_Value: "));
-                    utf8_append_with_capacity(&buffer_utf8, buffer_capacity, type_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Default_Value: "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, type_name);
+                    break;
+                }
+                case SSA_Kind_Struct_Type: {
+                    SSA** field_types = ssa->data.struct_type.field_types;
+                    utf8* field_names = ssa->data.struct_type.field_names;
+                    u32 field_count = ssa->data.struct_type.field_count;
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Struct_Type("));
+                    for (u32 i = 0; i < field_count; i++) {
+                        SSA* field_type = field_types[i];
+                        utf8 field_type_name = ssa_get_ssa_name(field_type);
+                        utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, field_type_name);
+                        utf8 field_name = field_names[i];
+                        if (field_name.count != 0) {
+                            utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(" "));
+                            utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, field_name);
+                        }
+                        if (i != field_count - 1) {
+                            utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(", "));
+                        }
+                    }
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(")"));
+                    break;
+                }
+                case SSA_Kind_Struct_Value: {
+                    SSA** field_values = ssa->data.struct_value.field_values;
+                    u32 field_count = ssa->data.struct_value.field_count;
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Struct_Value("));
+                    for (u32 i = 0; i < field_count; i++) {
+                        SSA* field_value = field_values[i];
+                        utf8 field_value_name = ssa_get_ssa_name(field_value);
+                        utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, field_value_name);
+                        if (i != field_count - 1) {
+                            utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(", "));
+                        }
+                    }
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str(")"));
+                    break;
+                }
+                case SSA_Kind_Struct_Index_Number: {
+                    SSA* struct_value = ssa->data.struct_index_number.struct_value;
+                    utf8 struct_value_name = ssa_get_ssa_name(struct_value);
+                    u32 index = ssa->data.struct_index_number.index;
+                    char index_buf[32];
+                    snprintf(index_buf, 32, "%u", index);
+                    utf8 index_utf8 = {index_buf, strlen(index_buf)};
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Struct_Index_Number "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, struct_value_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("["));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, index_utf8);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("]"));
+                    break;
+                }
+                case SSA_Kind_Struct_Type_Index_Number: {
+                    SSA* struct_type = ssa->data.struct_type_index_number.struct_type;
+                    utf8 struct_type_name = ssa_get_ssa_name(struct_type);
+                    u32 index = ssa->data.struct_type_index_number.index;
+                    char index_buf[32];
+                    snprintf(index_buf, 32, "%u", index);
+                    utf8 index_utf8 = {index_buf, strlen(index_buf)};
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Struct_Type_Index_Number "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, struct_type_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("["));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, index_utf8);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("]"));
+                    break;
+                }
+                case SSA_Kind_Struct_Index_Name: {
+                    SSA* struct_value = ssa->data.struct_index_name.struct_value;
+                    utf8 struct_value_name = ssa_get_ssa_name(struct_value);
+                    utf8 index_name = ssa->data.struct_index_name.index_name;
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Struct_Index_Name "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, struct_value_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("["));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, index_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("]"));
+                    break;
+                }
+                case SSA_Kind_Struct_Type_Index_Name: {
+                    SSA* struct_type = ssa->data.struct_type_index_name.struct_type;
+                    utf8 struct_type_name = ssa_get_ssa_name(struct_type);
+                    utf8 index_name = ssa->data.struct_type_index_name.index_name;
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("Struct_Type_Index_Name "));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, struct_type_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("["));
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, index_name);
+                    utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("]"));
                     break;
                 }
             }
 
-            utf8_append_with_capacity(&buffer_utf8, buffer_capacity, utf8_str("\n"));
+            utf8_append_with_capacity(&buffer_utf8, &buffer_capacity, utf8_str("\n"));
         }
     }
 
@@ -2108,7 +2610,7 @@ utf8 ssa_block_to_string(SSA_Block* block) {
 }
 
 void ssa_init_intrinsic_block() {
-    SSA_Block* block = &context.intrinsic_ssa_block.block;
+    SSA_Block* block = &context.global_block;
 
     SSA type_type = {0};
     type_type.kind = SSA_Kind_Type_Type;
@@ -2167,19 +2669,19 @@ void ssa_init_intrinsic_block() {
         int_type_function->kind = Function_Kind_Intrinsic;
         int_type_function->data.intrinsic.kind = Intrinsic_Function_Int_Type;
         int_type_function->name = utf8_str("int_type");
-        int_type_function->parameter_types_count = 2;
-        int_type_function->parameter_types = alloc(sizeof(SSA*) * 2);
+        int_type_function->parameter_count = 2;
         int_type_function->parameters = alloc(sizeof(SSA*) * 2);
-        int_type_function->parameter_types[1] = ssa_type_type();
         SSA* argument_1 = ssa_argument(1, &int_type_function->setup_block, NULL);
-        SSA* casted_argument_1 = ssa_implicit_cast(argument_1, int_type_function->parameter_types[1], &int_type_function->setup_block, NULL);
+        SSA* casted_argument_1 = ssa_implicit_cast(argument_1, ssa_type_type(), &int_type_function->setup_block, NULL);
         int_type_function->parameters[1] = casted_argument_1;
-        int_type_function->parameter_types[0] = argument_1;
         SSA* argument_0 = ssa_argument(0, &int_type_function->setup_block, NULL);
-        SSA* casted_argument_0 = ssa_implicit_cast(argument_0, int_type_function->parameter_types[0], &int_type_function->setup_block, NULL);
+        SSA* casted_argument_0 = ssa_implicit_cast(argument_0, casted_argument_1, &int_type_function->setup_block, NULL);
         int_type_function->parameters[0] = casted_argument_0;
         int_type_function->return_type = ssa_type_type();
-        context.intrinsic_ssa_block.int_type_value = int_type_function;
+
+        Function** int_type_function_ptr = alloc(sizeof(Function*));
+        *int_type_function_ptr = int_type_function;
+        context.intrinsic_ssa_block.int_type_value = int_type_function_ptr;
     }
 
     {
@@ -2191,19 +2693,19 @@ void ssa_init_intrinsic_block() {
         uint_type_function->kind = Function_Kind_Intrinsic;
         uint_type_function->data.intrinsic.kind = Intrinsic_Function_Uint_Type;
         uint_type_function->name = utf8_str("uint_type");
-        uint_type_function->parameter_types_count = 2;
-        uint_type_function->parameter_types = alloc(sizeof(SSA*) * 2);
+        uint_type_function->parameter_count = 2;
         uint_type_function->parameters = alloc(sizeof(SSA*) * 2);
-        uint_type_function->parameter_types[1] = ssa_type_type();
         SSA* argument_1 = ssa_argument(1, &uint_type_function->setup_block, NULL);
-        SSA* casted_argument_1 = ssa_implicit_cast(argument_1, uint_type_function->parameter_types[1], &uint_type_function->setup_block, NULL);
+        SSA* casted_argument_1 = ssa_implicit_cast(argument_1, ssa_type_type(), &uint_type_function->setup_block, NULL);
         uint_type_function->parameters[1] = casted_argument_1;
-        uint_type_function->parameter_types[0] = argument_1;
         SSA* argument_0 = ssa_argument(0, &uint_type_function->setup_block, NULL);
-        SSA* casted_argument_0 = ssa_implicit_cast(argument_0, uint_type_function->parameter_types[0], &uint_type_function->setup_block, NULL);
+        SSA* casted_argument_0 = ssa_implicit_cast(argument_0, casted_argument_1, &uint_type_function->setup_block, NULL);
         uint_type_function->parameters[0] = casted_argument_0;
         uint_type_function->return_type = ssa_type_type();
-        context.intrinsic_ssa_block.uint_type_value = uint_type_function;
+
+        Function** uint_type_function_ptr = alloc(sizeof(Function*));
+        *uint_type_function_ptr = uint_type_function;
+        context.intrinsic_ssa_block.uint_type_value = uint_type_function_ptr;
     }
 
     {
@@ -2215,18 +2717,19 @@ void ssa_init_intrinsic_block() {
         float_type_function->kind = Function_Kind_Intrinsic;
         float_type_function->data.intrinsic.kind = Intrinsic_Function_Float_Type;
         float_type_function->name = utf8_str("float_type");
-        float_type_function->parameter_types_count = 2;
-        float_type_function->parameter_types = alloc(sizeof(SSA*) * 2);
+        float_type_function->parameter_count = 2;
         float_type_function->parameters = alloc(sizeof(SSA*) * 2);
         SSA* argument_1 = ssa_argument(1, &float_type_function->setup_block, NULL);
-        SSA* casted_argument_1 = ssa_implicit_cast(argument_1, float_type_function->parameter_types[1], &float_type_function->setup_block, NULL);
+        SSA* casted_argument_1 = ssa_implicit_cast(argument_1, ssa_type_type(), &float_type_function->setup_block, NULL);
         float_type_function->parameters[1] = casted_argument_1;
-        float_type_function->parameter_types[0] = argument_1;
         SSA* argument_0 = ssa_argument(0, &float_type_function->setup_block, NULL);
-        SSA* casted_argument_0 = ssa_implicit_cast(argument_0, float_type_function->parameter_types[0], &float_type_function->setup_block, NULL);
+        SSA* casted_argument_0 = ssa_implicit_cast(argument_0, casted_argument_1, &float_type_function->setup_block, NULL);
         float_type_function->parameters[0] = casted_argument_0;
         float_type_function->return_type = ssa_type_type();
-        context.intrinsic_ssa_block.float_type_value = float_type_function;
+
+        Function** float_type_function_ptr = alloc(sizeof(Function*));
+        *float_type_function_ptr = float_type_function;
+        context.intrinsic_ssa_block.float_type_value = float_type_function_ptr;
     }
 
     {
@@ -2238,75 +2741,110 @@ void ssa_init_intrinsic_block() {
         compile_to_llvm_ir_function->kind = Function_Kind_Intrinsic;
         compile_to_llvm_ir_function->data.intrinsic.kind = Intrinsic_Function_Kind_Compile_To_LLVM_IR;
         compile_to_llvm_ir_function->name = utf8_str("compile_to_llvm_ir");
-        compile_to_llvm_ir_function->parameter_types_count = 1;
-        compile_to_llvm_ir_function->parameter_types = alloc(sizeof(SSA*) * 1);
+        compile_to_llvm_ir_function->parameter_count = 1;
         compile_to_llvm_ir_function->parameters = alloc(sizeof(SSA*) * 1);
-        compile_to_llvm_ir_function->parameter_types[0] = ssa_function_type();
         SSA* argument_0 = ssa_argument(0, &compile_to_llvm_ir_function->setup_block, NULL);
-        SSA* casted_argument_0 =
-            ssa_implicit_cast(argument_0, compile_to_llvm_ir_function->parameter_types[0], &compile_to_llvm_ir_function->setup_block, NULL);
+        SSA* casted_argument_0 = ssa_implicit_cast(argument_0, ssa_function_type(), &compile_to_llvm_ir_function->setup_block, NULL);
         compile_to_llvm_ir_function->parameters[0] = casted_argument_0;
         compile_to_llvm_ir_function->return_type = ssa_void_type();
-        context.intrinsic_ssa_block.compile_to_llvm_ir_value = compile_to_llvm_ir_function;
+
+        Function** compile_to_llvm_ir_function_ptr = alloc(sizeof(Function*));
+        *compile_to_llvm_ir_function_ptr = compile_to_llvm_ir_function;
+        context.intrinsic_ssa_block.compile_to_llvm_ir_value = compile_to_llvm_ir_function_ptr;
     }
 }
 
-Function_Context* ssa_get_function_context() {
-    return context.ssa_evaluation_context->function_context_stack[context.ssa_evaluation_context->function_context_stack_count - 1];
-}
-
-Function_Context* ssa_pop_function_context() {
-    Function_Context* function_context = ssa_get_function_context();
-    context.ssa_evaluation_context->function_context_stack_count--;
-    return function_context;
-}
-
-void ssa_push_function_context(Function_Context* function_context) {
-    ptr_append(context.ssa_evaluation_context->function_context_stack, context.ssa_evaluation_context->function_context_stack_count,
-               context.ssa_evaluation_context->function_context_stack_capacity, function_context);
-}
-
-void ssa_copy_evaluation_context_into_other_context(SSA_Evaluation_Context* evaluation_context, SSA_Evaluation_Context* other_evaluation_context) {
-    other_evaluation_context->function_context_stack_count = 0;
-    for (u32 i = 0; i < evaluation_context->function_context_stack_count; i++) {
-        Function_Context* function_context = evaluation_context->function_context_stack[i];
-        ptr_append(other_evaluation_context->function_context_stack, other_evaluation_context->function_context_stack_count,
-                   other_evaluation_context->function_context_stack_capacity, function_context);
+bool ssa_is_ref(SSA* ssa) {
+    switch (ssa->kind) {
+        case SSA_Kind_Struct_Type_Index_Name:
+        case SSA_Kind_Struct_Index_Number:
+        case SSA_Kind_Stack_Alloc:
+            return true;
+        case SSA_Kind_Struct_Type:
+        case SSA_Kind_Struct_Value:
+        case SSA_Kind_Struct_Type_Index_Number:
+        case SSA_Kind_Struct_Index_Name:
+        case SSA_Kind_Invalid:
+        case SSA_Kind_Store:
+        case SSA_Kind_Load:
+        case SSA_Kind_Function_Type:
+        case SSA_Kind_Type_Type:
+        case SSA_Kind_Function_Declaration:
+        case SSA_Kind_Parameter:
+        case SSA_Kind_Parameter_Type:
+        case SSA_Kind_Argument:
+        case SSA_Kind_Argument_Type:
+        case SSA_Kind_Int_Literal_Type:
+        case SSA_Kind_Int_Literal:
+        case SSA_Kind_Float_Literal_Type:
+        case SSA_Kind_Float_Literal:
+        case SSA_Kind_Return:
+        case SSA_Kind_Return_Type:
+        case SSA_Kind_Implicit_Cast:
+        case SSA_Kind_Explicit_Cast:
+        case SSA_Kind_Int_Type:
+        case SSA_Kind_Uint_Type:
+        case SSA_Kind_Float_Type:
+        case SSA_Kind_Void_Type:
+        case SSA_Kind_Compile_To_LLVM_IR:
+        case SSA_Kind_Build:
+        case SSA_Kind_Call_Setup:
+        case SSA_Kind_Call_Setup_Type:
+        case SSA_Kind_Call:
+        case SSA_Kind_Call_Return_Type:
+        case SSA_Kind_Pointer_Type:
+        case SSA_Kind_Underlying_Type:
+        case SSA_Kind_Default_Value:
+            return false;
     }
 }
 
-bool ssa_compile_time_value_equal(void* value1, void* value2, Type* type) {
-    if (value1 == NULL && value2 == NULL) return true;
+bool ssa_struct_has_field_names(Type* type) {
+    if (type->kind != Type_Kind_Struct) return false;
+    for (u32 i = 0; i < type->data.struct_.field_count; i++) {
+        utf8* field_name = type->data.struct_.field_names + i;
+        if (field_name->count != 0) return false;
+    }
+    return true;
+}
+
+bool ssa_is_math_type(Type* type) {
+    return type->kind == Type_Kind_Int || type->kind == Type_Kind_Uint || type->kind == Type_Kind_Float || type->kind == Type_Kind_Float_Literal ||
+           type->kind == Type_Kind_Int_Literal;
+}
+
+i64 ssa_type_size_compile_time(Type* type) {
     switch (type->kind) {
         case Type_Kind_Int_Literal: {
-            Big_Int* int1 = value1;
-            Big_Int* int2 = value2;
-            return int1->data == int2->data;
+            return sizeof(Big_Int);
         }
         case Type_Kind_Float_Literal: {
-            f64* float1 = value1;
-            f64* float2 = value2;
-            f64 diff = fabs(*float1 - *float2);
-            return diff < 0.00000001;
+            return sizeof(f64);
         }
         case Type_Kind_Type: {
-            return ssa_type_equal(value1, value2);
+            return sizeof(Type);
         }
-        case Type_Kind_Void:
-        case Type_Kind_Invalid: {
-            return true;
+        case Type_Kind_Function: {
+            return sizeof(Function*);
         }
-        case Type_Kind_Multi:
-        case Type_Kind_Ptr:
+        case Type_Kind_Call_Setup: {
+            return sizeof(Function_Context*);
+        }
+        case Type_Kind_Invalid:
+        case Type_Kind_Int:
         case Type_Kind_Uint:
         case Type_Kind_Float:
-        case Type_Kind_Int: {
-            assert(false);
-            return false;
+        case Type_Kind_Void:
+        case Type_Kind_Ptr:
+        case Type_Kind_Struct: {
+            return ssa_type_size(type);
         }
-        case Type_Kind_Call_Setup:
-        case Type_Kind_Function: {
-            return value1 == value2;
+        case Type_Kind_Optional: {
+            Type* optional_type = type->data.optional.type;
+            if (optional_type->kind == Type_Kind_Ptr) {
+                return sizeof(void*);
+            }
+            assert(false);
         }
     }
 }
@@ -2328,9 +2866,12 @@ i64 ssa_type_size(Type* type) {
             u32 bits = type->data.uint.bits;
             return (bits + 7) / 8;
         }
-        case Type_Kind_Multi: {
+        case Type_Kind_Optional: {
+            Type* optional_type = type->data.optional.type;
+            if (optional_type->kind == Type_Kind_Ptr) {
+                return sizeof(void*);
+            }
             assert(false);
-            return 0;
         }
         case Type_Kind_Call_Setup:
         case Type_Kind_Type:
@@ -2342,20 +2883,270 @@ i64 ssa_type_size(Type* type) {
         }
         case Type_Kind_Invalid: {
             internal_compiler_error();
+        }
+        case Type_Kind_Struct: {
+            assert(false);
             return 0;
         }
     }
 }
 
+bool ssa_type_allocator_valid(Type* type) {
+    if (type->kind == Type_Kind_Ptr) {
+        if (type->data.ptr.allocator == NULL) return false;
+    }
+    switch (type->kind) {
+        case Type_Kind_Ptr: {
+            return ssa_type_allocator_valid(type->data.ptr.type);
+        }
+        case Type_Kind_Optional: {
+            return ssa_type_allocator_valid(type->data.optional.type);
+        }
+        case Type_Kind_Invalid:
+        case Type_Kind_Type:
+        case Type_Kind_Int:
+        case Type_Kind_Int_Literal:
+        case Type_Kind_Uint:
+        case Type_Kind_Float:
+        case Type_Kind_Float_Literal:
+        case Type_Kind_Void:
+        case Type_Kind_Function:
+        case Type_Kind_Call_Setup: {
+            return true;
+        }
+        case Type_Kind_Struct: {
+            for (u32 i = 0; i < type->data.struct_.field_count; i++) {
+                Type* field_type = type->data.struct_.fields[i];
+                if (!ssa_type_allocator_valid(field_type)) return false;
+            }
+            return true;
+        }
+    }
+}
+
+static bool ssa_allocator_constraint_equal(Allocator_Constraint* constraint_1, Allocator_Constraint* constraint_2) {
+    if (constraint_1->kind != constraint_2->kind) return false;
+    switch (constraint_1->kind) {
+        case Allocator_Constraint_Kind_Invalid: {
+            internal_compiler_error();
+        }
+        case Allocator_Constraint_Kind_Function_Parameter:
+        case Allocator_Constraint_Kind_Function_Return: {
+            Function_Context* function_context_1 = constraint_1->data.function_parameter.function_context;
+            Function_Context* function_context_2 = constraint_2->data.function_parameter.function_context;
+            if (function_context_1 != function_context_2) return false;
+            u32 parameter_index_1 = constraint_1->data.function_parameter.parameter_index;
+            u32 parameter_index_2 = constraint_2->data.function_parameter.parameter_index;
+            if (parameter_index_1 != parameter_index_2) return false;
+            u32 parameter_allocator_index_1 = constraint_1->data.function_parameter.parameter_allocator_index;
+            u32 parameter_allocator_index_2 = constraint_2->data.function_parameter.parameter_allocator_index;
+            if (parameter_allocator_index_1 != parameter_allocator_index_2) return false;
+            return true;
+        }
+    }
+}
+
+void ssa_allocator_add_constraint(Allocator* allocator, Allocator_Constraint* constraint) {
+    for (u32 i = 0; i < allocator->constraints_count; i++) {
+        Allocator_Constraint* existing_constraint = &allocator->constraints[i];
+        if (ssa_allocator_constraint_equal(existing_constraint, constraint)) return;
+    }
+    ptr_append(allocator->constraints, allocator->constraints_count, allocator->constraints_capacity, *constraint);
+}
+
+void ssa_set_all_allocators_to_unknown(Type* type) {
+    switch (type->kind) {
+        case Type_Kind_Invalid: {
+            internal_compiler_error();
+        }
+        case Type_Kind_Call_Setup:
+        case Type_Kind_Void:
+        case Type_Kind_Function:
+        case Type_Kind_Int:
+        case Type_Kind_Int_Literal:
+        case Type_Kind_Uint:
+        case Type_Kind_Float:
+        case Type_Kind_Float_Literal:
+        case Type_Kind_Type: {
+            break;
+        }
+        case Type_Kind_Ptr: {
+            Allocator* allocator = *type->data.ptr.allocator;
+            Allocator_Value value = {0};
+            value.kind = Allocator_Value_Kind_Unknown;
+            allocator->value = value;
+            break;
+        }
+        case Type_Kind_Struct: {
+            for (u32 i = 0; i < type->data.struct_.field_count; i++) {
+                Type* field_type = type->data.struct_.fields[i];
+                ssa_set_all_allocators_to_unknown(field_type);
+            }
+            break;
+        }
+        case Type_Kind_Optional: {
+            Type* optional_type = type->data.optional.type;
+            ssa_set_all_allocators_to_unknown(optional_type);
+            break;
+        }
+    }
+}
+
+bool ssa_merge_type_allocators(Type* type_1, Type* type_2, SSA* error_ssa) {
+    assert(type_1->kind == Type_Kind_Ptr);
+    assert(type_2->kind == Type_Kind_Ptr);
+    Allocator* allocator_1 = *type_1->data.ptr.allocator;
+    Allocator* allocator_2 = *type_2->data.ptr.allocator;
+    *type_2->data.ptr.allocator = allocator_1;
+
+    for (u32 i = 0; i < allocator_2->constraints_count; i++) {
+        Allocator_Constraint* constraint = &allocator_2->constraints[i];
+        ssa_allocator_add_constraint(allocator_1, constraint);
+    }
+    if (allocator_1->value.kind == Allocator_Value_Kind_Unspecified) {
+        allocator_1->value.kind = allocator_2->value.kind;
+        return true;
+    }
+    if (allocator_1->value.kind == Allocator_Value_Kind_Unknown || allocator_2->value.kind == Allocator_Value_Kind_Unspecified) {
+        return true;
+    }
+    if (allocator_1->value.kind != allocator_2->value.kind) {
+        log_msg_ssa("Can't merge allocator types don't match", log_error, error_ssa);
+        return false;
+    }
+    switch (allocator_1->value.kind) {
+        case Allocator_Value_Kind_Unspecified:
+        case Allocator_Value_Kind_Invalid: {
+            internal_compiler_error();
+        }
+        case Allocator_Value_Kind_Global:
+        case Allocator_Value_Kind_Stack:
+        case Allocator_Value_Kind_Unknown: {
+            return true;
+        }
+        case Allocator_Value_Kind_SSA: {
+            SSA* ssa_1 = allocator_1->value.ssa;
+            SSA* ssa_2 = allocator_2->value.ssa;
+            if (ssa_1 != ssa_2) {
+                log_msg_ssa("Can't merge allocator SSAs don't match", log_error, error_ssa);
+                return false;
+            }
+            return true;
+        }
+    }
+    internal_compiler_error();
+}
+
+void ssa_type_init_allocator(Type* type) {
+    assert(type->kind == Type_Kind_Ptr);
+    assert(type->data.ptr.allocator == NULL);
+    Allocator* allocator = alloc(sizeof(Allocator));
+    allocator->value.kind = Allocator_Value_Kind_Unspecified;
+    type->data.ptr.allocator = alloc(sizeof(Allocator*));
+    *type->data.ptr.allocator = allocator;
+}
+
+static void __ssa_type_set_allocator_function_return_full(Type* type, Function_Context* function_context, u32 return_index, u32* return_allocator_index_ref) {
+    switch (type->kind) {
+        case Type_Kind_Invalid: {
+            internal_compiler_error();
+        }
+        case Type_Kind_Call_Setup:
+        case Type_Kind_Int:
+        case Type_Kind_Int_Literal:
+        case Type_Kind_Uint:
+        case Type_Kind_Float:
+        case Type_Kind_Float_Literal:
+        case Type_Kind_Void:
+        case Type_Kind_Function:
+        case Type_Kind_Type: {
+            break;
+        }
+        case Type_Kind_Ptr: {
+            Allocator* allocator = *type->data.ptr.allocator;
+            Allocator_Constraint constraint = {0};
+            constraint.kind = Allocator_Constraint_Kind_Function_Return;
+            constraint.data.function_return.function_context = function_context;
+            constraint.data.function_return.return_index = return_index;
+            constraint.data.function_return.return_allocator_index = *return_allocator_index_ref;
+            *return_allocator_index_ref += 1;
+            ssa_allocator_add_constraint(allocator, &constraint);
+            __ssa_type_set_allocator_function_return_full(type->data.ptr.type, function_context, return_index, return_allocator_index_ref);
+            break;
+        }
+        case Type_Kind_Struct: {
+            for (u32 i = 0; i < type->data.struct_.field_count; i++) {
+                Type* field_type = type->data.struct_.fields[i];
+                __ssa_type_set_allocator_function_return_full(field_type, function_context, return_index, return_allocator_index_ref);
+            }
+            break;
+        }
+        case Type_Kind_Optional: {
+            Type* optional_type = type->data.optional.type;
+            __ssa_type_set_allocator_function_return_full(optional_type, function_context, return_index, return_allocator_index_ref);
+            break;
+        }
+    }
+}
+
+static void _ssa_type_set_allocator_function_return_full(Type* type, Function_Context* function_context) {
+    if (type->kind == Type_Kind_Struct && !ssa_struct_has_field_names(type)) {
+        for (u32 i = 0; i < type->data.struct_.field_count; i++) {
+            Type* field_type = type->data.struct_.fields[i];
+            u32 allocator_index = 0;
+            __ssa_type_set_allocator_function_return_full(field_type, function_context, i, &allocator_index);
+        }
+        return;
+    }
+    u32 allocator_index = 0;
+    __ssa_type_set_allocator_function_return_full(type, function_context, 0, &allocator_index);
+}
+
+void ssa_type_set_allocator_function_return_full(Type* type) {
+    Function_Context* function_context = ssa_get_function_context().function_context;
+    return _ssa_type_set_allocator_function_return_full(type, function_context);
+}
+
+void ssa_type_set_allocator_function_call_return_full(Type* type, SSA* setup_ssa) {
+    Function_Context* function_context = ssa_evaluate_function_context(setup_ssa);
+    return _ssa_type_set_allocator_function_return_full(type, function_context);
+}
+
+void ssa_type_set_allocator_function_parameter_full(Type* type, u32 parameter_index) {
+    assert(false);
+}
+
 bool ssa_can_explicit_cast(Type* type, Type* cast_type) {
+    if (type->kind == Type_Kind_Optional) return ssa_can_explicit_cast(type->data.optional.type, cast_type);
+    if (cast_type->kind == Type_Kind_Optional) return ssa_can_explicit_cast(type, cast_type->data.optional.type);
     if (ssa_type_equal(type, cast_type)) return true;
     if (type->kind == Type_Kind_Ptr && cast_type->kind == Type_Kind_Ptr) return true;
-    if (ssa_type_math_type(type) && ssa_type_math_type(cast_type)) return true;
+    if (ssa_is_math_type(type) && ssa_is_math_type(cast_type)) return true;
+    if (type->kind == Type_Kind_Struct && cast_type->kind == Type_Kind_Struct) {
+        if (type->data.struct_.field_count != cast_type->data.struct_.field_count) return false;
+        for (u32 i = 0; i < type->data.struct_.field_count; i++) {
+            Type* type_field = type->data.struct_.fields[i];
+            Type* cast_type_field = cast_type->data.struct_.fields[i];
+            if (!ssa_type_equal(type_field, cast_type_field)) return false;
+        }
+        return true;
+    }
     return false;
 }
 
 bool ssa_can_implicit_cast(Type* type, Type* cast_type) {
     if (ssa_type_equal(type, cast_type)) return true;
+
+    if (type->kind == Type_Kind_Struct && cast_type->kind == Type_Kind_Struct) {
+        if (type->data.struct_.field_count != cast_type->data.struct_.field_count) return false;
+        for (u32 i = 0; i < type->data.struct_.field_count; i++) {
+            Type* type_field = type->data.struct_.fields[i];
+            Type* cast_type_field = cast_type->data.struct_.fields[i];
+            if (!ssa_type_equal(type_field, cast_type_field)) return false;
+        }
+        if (!ssa_struct_has_field_names(type)) return false;
+        return true;
+    }
 
     // Int implicit casts
     if (type->kind == Type_Kind_Int_Literal && cast_type->kind == Type_Kind_Int) {
@@ -2390,6 +3181,30 @@ bool ssa_can_implicit_cast(Type* type, Type* cast_type) {
     }
 
     return false;
+}
+
+void ssa_cast_type_allocator(Type* from_type, Type* cast_type) {
+    if (from_type->kind == Type_Kind_Optional) {
+        ssa_cast_type_allocator(from_type->data.optional.type, cast_type);
+        return;
+    } else if (cast_type->kind == Type_Kind_Optional) {
+        ssa_cast_type_allocator(from_type, cast_type->data.optional.type);
+        return;
+    } else if (from_type->kind == Type_Kind_Struct && cast_type->kind == Type_Kind_Struct && ssa_can_explicit_cast(from_type, cast_type)) {
+        for (u32 i = 0; i < from_type->data.struct_.field_count; i++) {
+            Type* from_field_type = from_type->data.struct_.fields[i];
+            Type* cast_field_type = cast_type->data.struct_.fields[i];
+            assert(ssa_type_equal(from_field_type, cast_field_type));
+            ssa_cast_type_allocator(from_field_type, cast_field_type);
+        }
+        return;
+    } else if (from_type->kind == Type_Kind_Ptr && cast_type->kind == Type_Kind_Ptr) {
+        bool res = ssa_merge_type_allocators(from_type, cast_type, NULL);
+        assert(res);
+        ssa_cast_type_allocator(from_type->data.ptr.type, cast_type->data.ptr.type);
+        return;
+    }
+    ssa_set_all_allocators_to_unknown(cast_type);
 }
 
 void* ssa_cast_value(void* value, Type* value_type, Type* cast_type) {
@@ -2502,60 +3317,47 @@ void* ssa_cast_value(void* value, Type* value_type, Type* cast_type) {
     return NULL;
 }
 
-void* ssa_get_type_default_value(Type* type) {
+bool ssa_compile_time_value_equal(void* value1, void* value2, Type* type) {
+    assert(value1 != NULL);
+    assert(value2 != NULL);
+    if (value1 == value2) return true;
     switch (type->kind) {
-        case Type_Kind_Invalid:
-            return NULL;
-        case Type_Kind_Type:
-            return context.intrinsic_ssa_block.type_type_value;
-        case Type_Kind_Int: {
-            u32 bits = type->data.int_.bits;
-            u32 bytes = (bits + 7) / 8;
-            void* memory = alloc(bytes);
-            memset(memory, 0, bytes);
-            return memory;
+        case Type_Kind_Invalid: {
+            internal_compiler_error();
+        }
+        case Type_Kind_Type: {
+            return ssa_type_equal(value1, value2);
         }
         case Type_Kind_Int_Literal: {
-            Big_Int* big_int = alloc(sizeof(Big_Int));
-            big_int->data = 0;
-            return big_int;
-        }
-        case Type_Kind_Uint: {
-            u32 bits = type->data.uint.bits;
-            u32 bytes = (bits + 7) / 8;
-            void* memory = alloc(bytes);
-            memset(memory, 0, bytes);
-            return memory;
-        }
-        case Type_Kind_Float: {
-            u32 bits = type->data.int_.bits;
-            u32 bytes = (bits + 7) / 8;
-            void* memory = alloc(bytes);
-            memset(memory, 0, bytes);
-            return memory;
+            Big_Int* big_int1 = value1;
+            i64 value_i64_1 = big_int1->data;
+            Big_Int* big_int2 = value2;
+            i64 value_i64_2 = big_int2->data;
+            return value_i64_1 == value_i64_2;
         }
         case Type_Kind_Float_Literal: {
-            f64* float_ = alloc(sizeof(f64));
-            *float_ = 0;
-            return float_;
+            f64* float1 = value1;
+            f64 value_f64_1 = *float1;
+            f64* float2 = value2;
+            f64 value_f64_2 = *float2;
+            return value_f64_1 == value_f64_2;
+        }
+        case Type_Kind_Call_Setup:
+        case Type_Kind_Function: {
+            return *(void**)value1 == *(void**)value2;
         }
         case Type_Kind_Void: {
-            return SSA_SUCCESS_VOID_VALUE;
+            return true;
         }
-        case Type_Kind_Function: {
-            Function* function = alloc(sizeof(Function));
-            return function;
-        }
-        case Type_Kind_Ptr: {
-            return NULL;
-        }
-        case Type_Kind_Multi: {
-            assert(false);
-            return NULL;
-        }
-        case Type_Kind_Call_Setup: {
-            SSA_Call_Setup* call_setup = alloc(sizeof(SSA_Call_Setup));
-            return call_setup;
+        case Type_Kind_Optional:
+        case Type_Kind_Ptr:
+        case Type_Kind_Int:
+        case Type_Kind_Uint:
+        case Type_Kind_Float:
+        case Type_Kind_Struct: {
+            i64 type_size = ssa_type_size(type);
+            if (memcmp(value1, value2, type_size) != 0) return false;
+            return true;
         }
     }
 }
@@ -2564,6 +3366,9 @@ bool ssa_type_equal(Type* type1, Type* type2) {
     if (type1->kind != type2->kind) return false;
     switch (type1->kind) {
         case Type_Kind_Ptr: {
+            Allocator* allocator_1 = *type1->data.ptr.allocator;
+            Allocator* allocator_2 = *type2->data.ptr.allocator;
+            if (allocator_1 != allocator_2) return false;
             Type* ptr1 = type1->data.ptr.type;
             Type* ptr2 = type2->data.ptr.type;
             return ssa_type_equal(ptr1, ptr2);
@@ -2583,241 +3388,71 @@ bool ssa_type_equal(Type* type1, Type* type2) {
             u32 bits2 = type2->data.uint.bits;
             return bits1 == bits2;
         }
+        case Type_Kind_Struct: {
+            if (type1->data.struct_.field_count != type2->data.struct_.field_count) return false;
+            for (u32 i = 0; i < type1->data.struct_.field_count; i++) {
+                Type* type1_field = type1->data.struct_.fields[i];
+                Type* type2_field = type2->data.struct_.fields[i];
+                if (!ssa_type_equal(type1_field, type2_field)) return false;
+                utf8* type1_field_name = type1->data.struct_.field_names + i;
+                utf8* type2_field_name = type2->data.struct_.field_names + i;
+                if (!utf8_equal(*type1_field_name, *type2_field_name)) return false;
+            }
+            return true;
+        }
+        case Type_Kind_Optional: {
+            return ssa_type_equal(type1->data.optional.type, type2->data.optional.type);
+        }
         case Type_Kind_Invalid:
         case Type_Kind_Type:
         case Type_Kind_Int_Literal:
         case Type_Kind_Float_Literal:
         case Type_Kind_Void:
         case Type_Kind_Function:
-        case Type_Kind_Multi:
         case Type_Kind_Call_Setup:
             return true;
     }
 }
 
-bool ssa_type_math_type(Type* type) {
-    return type->kind == Type_Kind_Int || type->kind == Type_Kind_Uint || type->kind == Type_Kind_Float || type->kind == Type_Kind_Float_Literal ||
-           type->kind == Type_Kind_Int_Literal;
+void ssa_add_interpreter_to_function_context() {
+    if (context.evaluate_context->function_context_stack_count == 0) internal_compiler_error();
+    All_Function_Context* ctx = &context.evaluate_context->function_context_stack[context.evaluate_context->function_context_stack_count - 1];
+    if (ctx->interpreter_function_context != NULL) internal_compiler_error();
+    ctx->interpreter_function_context = alloc(sizeof(Interpreter_Function_Context));
 }
 
-bool ssa_has_been_evaluated(SSA* ssa, SSA_Possible_Values* out_possible_values) {
-    for (u32 i = 0; i < ssa->compile_time_value_count; i++) {
-        SSA_Compile_Time_Value* compile_time_value = ssa->compile_time_value + i;
-
-        Function_Context* ssa_function_context = compile_time_value->function_context;
-        Function_Context* context_function_context = ssa_get_function_context();
-        bool function_contexts_match = ssa_function_context == context_function_context;
-
-        if (function_contexts_match) {
-            if (compile_time_value->displayed_logs == false) {
-                compile_time_value->displayed_logs = true;
-                for (u32 i = 0; i < compile_time_value->log_count; i++) {
-                    Log* log = compile_time_value->log + i;
-                    log_append(log);
-                }
-            }
-
-            *out_possible_values = compile_time_value->possible_values;
-            return true;
-        }
-    }
-    return false;
+Interpreter_Function_Context* ssa_clear_interpreter_from_global_context() {
+    if (context.evaluate_context->function_context_stack_count == 0) internal_compiler_error();
+    return context.evaluate_context->function_context_stack[0].interpreter_function_context;
 }
 
-bool ssa_has_been_type_checked(SSA* ssa, bool* type_check_result) {
-    for (u32 i = 0; i < ssa->has_been_type_checked_count; i++) {
-        SSA_Has_Been_Type_Checked* has_been_type_checked = &ssa->has_been_type_checked[i];
-
-        Function_Context* val_function_context = has_been_type_checked->function_context;
-        Function_Context* context_function_context = ssa_get_function_context();
-
-        bool function_contexts_match = val_function_context == context_function_context;
-        if (function_contexts_match) {
-            if (has_been_type_checked->displayed_logs == false) {
-                has_been_type_checked->displayed_logs = true;
-                for (u32 i = 0; i < has_been_type_checked->log_count; i++) {
-                    Log* log = has_been_type_checked->log + i;
-                    log_append(log);
-                }
-            }
-            *type_check_result = has_been_type_checked->type_check_result;
-            return true;
-        }
-    }
-    return false;
+void ssa_add_interpreter_to_global_context(Interpreter_Function_Context* inter_function_context) {
+    if (context.evaluate_context->function_context_stack_count == 0) internal_compiler_error();
+    context.evaluate_context->function_context_stack[0].interpreter_function_context = inter_function_context;
 }
 
-SSA_Possible_Values ssa_possible_single_value(void* value) {
-    SSA_Possible_Values values = {0};
-    values.values = alloc(sizeof(void*));
-    values.values_count = 1;
-    values.values_capacity = 1;
-    values.values[0] = value;
-    return values;
+Function_Context* ssa_get_cache_function_context(SSA* ssa) {
+    if (ssa->block->kind == SSA_Block_Kind_Global) return context.evaluate_context->function_context_stack[0].function_context;
+    return ssa_get_function_context().function_context;
 }
 
-void ssa_possible_providence_values_consolidate(SSA_Possible_Providence_Values* values, Type* type, i64 value_size) {
-    for (u32 i = 0; i < values->values_count; i++) {
-        SSA_Possible_Providence_Value* value = &values->values[i];
-        void* value_ptr = value->value;
-        for (u32 j = i + 1; j < values->values_count; j++) {
-            SSA_Possible_Providence_Value* value2 = &values->values[j];
-            void* value2_ptr = value2->value;
-
-            bool value_ptr_match = ssa_compile_time_value_equal(value_ptr, value2_ptr, type);
-            bool filled_same_bytes_same = true;
-            for (i64 k = 0; k < value_size; k++) {
-                if (value->bytes_filled[k] != value2->bytes_filled[k]) filled_same_bytes_same = false;
-            }
-
-            if (value_ptr_match && filled_same_bytes_same) {
-                values->values_count--;
-                values->values[j] = values->values[values->values_count];
-                j--;
-            }
-        }
-    }
+All_Function_Context ssa_get_function_context() {
+    if (context.evaluate_context->function_context_stack_count == 0) internal_compiler_error();
+    return context.evaluate_context->function_context_stack[context.evaluate_context->function_context_stack_count - 1];
 }
 
-void ssa_possible_values_consolidate(SSA_Possible_Values* values, Type* type) {
-    if (type->kind == Type_Kind_Ptr) {
-        for (u32 i = 0; i < values->values_count; i++) {
-            void* value = values->values[i];
-            if (value == NULL) continue;
-            Pointer_Providence* providence = value;
-            if (providence->providence == 0) {
-                values->values[i] = NULL;
-            }
-        }
-    }
-
-    for (u32 i = 0; i < values->values_count; i++) {
-        void* value = values->values[i];
-        for (u32 j = i + 1; j < values->values_count; j++) {
-            void* value2 = values->values[j];
-            if (ssa_compile_time_value_equal(value, value2, type)) {
-                values->values_count--;
-                values->values[j] = values->values[values->values_count];
-                j--;
-            }
-        }
-    }
-
-    if (values->values_count == 1) {
-        void* value = values->values[0];
-        if (value == NULL) {
-            values->values_count = 0;
-        }
-    }
+void ssa_pop_function_context() {
+    context.evaluate_context->function_context_stack_count--;
 }
 
-bool ssa_possible_providence_value_full(SSA_Possible_Providence_Value value, i64 value_size) {
-    if (value_size == 0) {
-        return value.value != NULL;
-    }
-    for (i64 i = 0; i < value_size; i++) {
-        if (value.bytes_filled[i] == 0) return false;
-    }
-    return true;
+void ssa_push_function_context(All_Function_Context all) {
+    ptr_append(context.evaluate_context->function_context_stack, context.evaluate_context->function_context_stack_count,
+               context.evaluate_context->function_context_stack_capacity, all);
 }
 
-SSA_Possible_Providence_Value ssa_copy_possible_providence_value(SSA_Possible_Providence_Value value, i64 value_size) {
-    if (value_size == 0) return value;
-    SSA_Possible_Providence_Value new_value = {0};
-    new_value.value = alloc(value_size);
-    memcpy(new_value.value, value.value, value_size);
-    new_value.bytes_filled = alloc(value_size);
-    memcpy(new_value.bytes_filled, value.bytes_filled, value_size);
-    return new_value;
-}
-
-bool ssa_in_providence_and_will_change(Pointer_Providence* base_providence, i64 base_value_size, Pointer_Providence* address_providence, i64 address_value_size,
-                                       SSA_Possible_Providence_Values* values) {
-    if (base_providence->providence == 0 || address_providence->providence == 0) return false;
-    if (base_value_size == 0) {
-        if (address_value_size == 0) {
-            if (base_providence->providence == address_providence->providence) {
-                return true;
-            }
-        }
-        return false;
-    }
-    i64 providence_offset = address_providence->providence - base_providence->providence;
-    if (providence_offset >= base_value_size) return false;
-    if (providence_offset < 0) {
-        address_value_size += providence_offset;
-        providence_offset = 0;
-        if (address_value_size <= 0) return false;
-    }
-
-    for (u32 i = 0; i < values->values_count; i++) {
-        SSA_Possible_Providence_Value* value = &values->values[i];
-        for (i64 i = providence_offset; i < base_value_size; i++) {
-            if (value->bytes_filled[i] == 0) return true;
-        }
-    }
-
-    return false;
-}
-
-SSA_Possible_Providence_Value ssa_create_possible_providence_value(Pointer_Providence* base_providence, i64 base_value_size,
-                                                                   Pointer_Providence* address_providence, i64 address_value_size, void* address_value) {
-    void* base_address_value = address_value;
-    if (base_providence->providence == 0 || address_providence->providence == 0) return (SSA_Possible_Providence_Value){0};
-    if (base_value_size == 0) {
-        if (address_value_size == 0) {
-            if (base_providence->providence == address_providence->providence) {
-                SSA_Possible_Providence_Value value = {0};
-                value.value = address_value;
-                value.bytes_filled = NULL;
-                return value;
-            }
-        }
-        return (SSA_Possible_Providence_Value){0};
-    }
-    i64 providence_offset = address_providence->providence - base_providence->providence;
-    if (providence_offset >= base_value_size) return (SSA_Possible_Providence_Value){0};
-    if (providence_offset < 0) {
-        address_value = ((char*)address_value) - providence_offset;
-        address_value_size += providence_offset;
-        providence_offset = 0;
-        if (address_value_size <= 0) return (SSA_Possible_Providence_Value){0};
-    }
-
-    void* value = NULL;
-    u8* bytes_filled = alloc(base_value_size);
-    if (base_address_value == NULL) {
-        for (i64 i = 0; i < base_value_size; i++) {
-            bytes_filled[i] = 1;
-        }
-    } else {
-        value = alloc(base_value_size);
-        for (i64 i = providence_offset; i < base_value_size; i++) {
-            bytes_filled[i] = 1;
-            ((char*)value)[i] = ((char*)address_value)[i];
-        }
-    }
-
-    SSA_Possible_Providence_Value possible_providence_value = {0};
-    possible_providence_value.value = value;
-    possible_providence_value.bytes_filled = bytes_filled;
-    return possible_providence_value;
-}
-
-SSA_Block_Location ssa_get_location(SSA* ssa) {
-    SSA_Block* block = ssa->block;
-    for (u32 i = 0; i < block->statement_lists_count; i++) {
-        SSA_List* list = block->statement_lists + i;
-        for (u32 j = 0; j < list->statements_count; j++) {
-            SSA* statement = list->statements + j;
-            if (statement == ssa) {
-                SSA_Block_Location location = {i, j};
-                return location;
-            }
-        }
-    }
-    internal_compiler_error();
-    return (SSA_Block_Location){0};
+bool ssa_running_interpreter() {
+    All_Function_Context all = ssa_get_function_context();
+    return all.interpreter_function_context != NULL;
 }
 
 utf8 ssa_kind_to_string(SSA_Kind kind) {
@@ -2836,10 +3471,6 @@ utf8 ssa_kind_to_string(SSA_Kind kind) {
             return utf8_str("SSA_Kind_Type_Type");
         case SSA_Kind_Function_Declaration:
             return utf8_str("SSA_Kind_Function_Declaration");
-        case SSA_Kind_Multi_Value:
-            return utf8_str("SSA_Kind_Multi_Value");
-        case SSA_Kind_Index_Multi_Value:
-            return utf8_str("SSA_Kind_Index_Multi_Value");
         case SSA_Kind_Parameter:
             return utf8_str("SSA_Kind_Parameter");
         case SSA_Kind_Int_Literal_Type:
@@ -2874,10 +3505,6 @@ utf8 ssa_kind_to_string(SSA_Kind kind) {
             return utf8_str("SSA_Kind_Call");
         case SSA_Kind_Argument:
             return utf8_str("SSA_Kind_Argument");
-        case SSA_Kind_Multi_Type:
-            return utf8_str("SSA_Kind_Multi_Type");
-        case SSA_Kind_Index_Multi_Type:
-            return utf8_str("SSA_Kind_Index_Multi_Type");
         case SSA_Kind_Parameter_Type:
             return utf8_str("SSA_Kind_Parameter_Type");
         case SSA_Kind_Argument_Type:
@@ -2894,5 +3521,17 @@ utf8 ssa_kind_to_string(SSA_Kind kind) {
             return utf8_str("SSA_Kind_Default_Value");
         case SSA_Kind_Explicit_Cast:
             return utf8_str("SSA_Kind_Explicit_Cast");
+        case SSA_Kind_Struct_Type:
+            return utf8_str("SSA_Kind_Struct_Type");
+        case SSA_Kind_Struct_Value:
+            return utf8_str("SSA_Kind_Struct_Value");
+        case SSA_Kind_Struct_Index_Number:
+            return utf8_str("SSA_Kind_Struct_Index_Number");
+        case SSA_Kind_Struct_Type_Index_Number:
+            return utf8_str("SSA_Kind_Struct_Type_Index_Number");
+        case SSA_Kind_Struct_Index_Name:
+            return utf8_str("SSA_Kind_Struct_Index_Name");
+        case SSA_Kind_Struct_Type_Index_Name:
+            return utf8_str("SSA_Kind_Struct_Type_Index_Name");
     }
 }

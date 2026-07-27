@@ -35,7 +35,7 @@ bool log_has_error_after(u32 location) {
     return false;
 }
 
-static void log_get_location_sub_string_highlight(Cap_File* file, utf8 sub_string, u32 line, utf8* msg_buffer_utf8, u64 msg_buffer_capacity) {
+static void log_get_location_sub_string_highlight(Cap_File* file, utf8 sub_string, u32 line, utf8* msg_buffer_utf8, u32* msg_buffer_capacity) {
     utf8 line_contents = cap_file_get_line(file, line);
     bool show_newline = line_contents.data + line_contents.count <= sub_string.data + sub_string.count;
     if (show_newline) {
@@ -97,8 +97,9 @@ static void log_get_location_sub_string_highlight(Cap_File* file, utf8 sub_strin
 }
 
 void log_output(Log_Level level) {
-    u32 msg_buffer_capacity = 32768;
-    char* msg_buffer = alloc(msg_buffer_capacity + msg_buffer_capacity * 0.2);
+    u32 msg_buffer_capacity_smem = 128;
+    u32* msg_buffer_capacity = &msg_buffer_capacity_smem;
+    char* msg_buffer = alloc(msg_buffer_capacity_smem);
     utf8 msg_buffer_utf8 = {msg_buffer, 0};
 
     for (u32 i = 0; i < context.logs_count; i++) {
@@ -148,9 +149,9 @@ void log_output(Log_Level level) {
                 utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\033[37mDebug"));
                 break;
             }
-            case log_invalid:
-                assert(false);
-                break;
+            case log_invalid: {
+                internal_compiler_error();
+            }
         }
 
         if (log_has_location(log)) {
@@ -221,9 +222,9 @@ void log_output(Log_Level level) {
                     utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\033[37m"));
                     break;
                 }
-                case log_invalid:
-                    assert(false);
-                    break;
+                case log_invalid: {
+                    internal_compiler_error();
+                }
             }
             utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("("));
             utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, ssa_type_string);
@@ -252,25 +253,27 @@ void log_output(Log_Level level) {
             }
         }
     }
+
     // swap tabs for 4 spaces
-    char* msg_buffer2 = alloc(msg_buffer_capacity);
+    msg_buffer = msg_buffer_utf8.data;
+    char* msg_buffer2 = alloc(msg_buffer_capacity_smem);
     memcpy(msg_buffer2, msg_buffer, msg_buffer_utf8.count);
     u64 msg_buffer_index = 0;
     for (u64 i = 0; i < msg_buffer_utf8.count; i++) {
         if (msg_buffer2[i] == '\t') {
-            msg_buffer[msg_buffer_index++] = ' ';
-            msg_buffer[msg_buffer_index++] = ' ';
-            msg_buffer[msg_buffer_index++] = ' ';
-            msg_buffer[msg_buffer_index++] = ' ';
+            ptr_append(msg_buffer, msg_buffer_index, msg_buffer_capacity_smem, ' ');
+            ptr_append(msg_buffer, msg_buffer_index, msg_buffer_capacity_smem, ' ');
+            ptr_append(msg_buffer, msg_buffer_index, msg_buffer_capacity_smem, ' ');
+            ptr_append(msg_buffer, msg_buffer_index, msg_buffer_capacity_smem, ' ');
         } else if (msg_buffer2[i] == '\r') {
             // skip
         } else {
-            msg_buffer[msg_buffer_index++] = msg_buffer2[i];
+            ptr_append(msg_buffer, msg_buffer_index, msg_buffer_capacity_smem, msg_buffer2[i]);
         }
     }
-    msg_buffer[msg_buffer_index] = 0;
+    ptr_append(msg_buffer, msg_buffer_index, msg_buffer_capacity_smem, 0);
     u64 msg_buffer_len = strlen(msg_buffer);
-    msg_buffer_utf8.count = msg_buffer_len;
+    msg_buffer_utf8.count = msg_buffer_index;
     if (context.log_print) printf("%.*s", utf8_fmt(msg_buffer_utf8));
     if (context.log_file != NULL) fwrite(msg_buffer_utf8.data, 1, msg_buffer_utf8.count, context.log_file);
     log_clear();

@@ -1,9 +1,11 @@
 #include "cap.h"
 
 #include "ast.c"
+#include "llvm.c"
 #include "log.c"
 #include "project.c"
 #include "ssa.c"
+#include "ssa.h"
 #include "token.c"
 #include "util/util.c"
 
@@ -28,22 +30,19 @@ int cap_init(utf8 dir) {
         return -1;
     }
     context.log_print = true;
-    context.pointer_providence_counter = UINT32_MAX;
-    context.ssa_evaluation_context = alloc(sizeof(SSA_Evaluation_Context));
-
-    Function_Context* function_context = alloc(sizeof(Function_Context));
-    ptr_append(context.ssa_evaluation_context->function_context_stack, context.ssa_evaluation_context->function_context_stack_count,
-               context.ssa_evaluation_context->function_context_stack_capacity, function_context);
 
     ast_setup_intrinsics();
 
-    ssa_init_intrinsic_block();
+    context.evaluate_context = alloc(sizeof(Evaluate_Context));
+    Function_Context* global_function_context = alloc(sizeof(Function_Context));
+    All_Function_Context global_all = {0};
+    global_all.function_context = global_function_context;
+    ssa_push_function_context(global_all);
 
-    SSA_Block* intrinsic_block = &context.intrinsic_ssa_block.block;
-    intrinsic_block->kind = SSA_Block_Kind_Global;
     SSA_Block* global_block = &context.global_block;
     global_block->kind = SSA_Block_Kind_Global;
-    ptr_append(global_block->branchs_to_this_block, global_block->branchs_to_this_block_count, global_block->branchs_to_this_block_capacity, intrinsic_block);
+
+    ssa_init_intrinsic_block();
 
     return 0;
 }

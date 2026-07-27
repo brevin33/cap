@@ -20,6 +20,7 @@ typedef struct Ast_Function_Declaration Ast_Function_Declaration;
 typedef struct Ast_Call Ast_Call;
 typedef struct Ast_Argument_List Ast_Argument_List;
 typedef struct Ast_Build Ast_Build;
+typedef struct Ast_Assign Ast_Assign;
 
 typedef struct Scope Scope;
 typedef struct Scope_Variable Scope_Variable;
@@ -43,6 +44,7 @@ typedef enum Ast_Kind {
     Ast_Kind_Argument_List,
     Ast_Kind_Build,
     Ast_Kind_Intrinsic,
+    Ast_Kind_Assign,
 } Ast_Kind;
 
 struct Ast_File {
@@ -130,6 +132,13 @@ struct Ast_Argument_List {
     u32 arguments_count;
 };
 
+struct Ast_Assign {
+    Ast* lhs;
+    Ast* rhs;
+    u32 lhs_count;
+    u32 rhs_count;
+};
+
 typedef enum Ast_Intrinsic {
     Ast_Intrinsic_Invalid = 0,
     Ast_Intrinsic_Int_Type,
@@ -159,6 +168,7 @@ union Ast_Data {
     Ast_Call call;
     Ast_Argument_List argument_list;
     Ast_Intrinsic intrinsic;
+    Ast_Assign assign;
 };
 
 struct Ast {
@@ -207,7 +217,6 @@ Ast ast_top_level_statement(Tokens* tokens, Cap_File* file);
 Ast ast_scoped_statement(Tokens* tokens, Cap_File* file);
 Ast ast_statement_starting_with_expression(Tokens* tokens, Cap_File* file);
 Ast ast_expression(Tokens* tokens, Cap_File* file);
-Ast ast_expression_without_biops(Tokens* tokens, Cap_File* file);
 
 Ast ast_scope(Tokens* tokens, Cap_File* file);
 Ast ast_return(Tokens* tokens, Cap_File* file);

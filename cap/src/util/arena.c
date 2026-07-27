@@ -4,7 +4,8 @@ void* _internal_arena_alloc(Arena* arena, u64 size) {
     if (arena->parent == NULL) {
         void* mem = malloc(size);
         if (mem == NULL) {
-            printf("Malloc failed\n");
+            printf("malloc failed\n");
+            debug_break();
             exit(1);
         }
         return mem;

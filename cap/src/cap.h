@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ast.h"
+#include "llvm.h"
 #include "log.h"
 #include "project.h"
 #include "ssa.h"
@@ -11,8 +12,6 @@ typedef struct Context Context;
 typedef struct Intrinsic_SSA_Block Intrinsic_SSA_Block;
 
 struct Intrinsic_SSA_Block {
-    SSA_Block block;
-
     SSA* function_type;
     void* function_type_value;
 
@@ -55,9 +54,7 @@ struct Context {
     Intrinsic_SSA_Block intrinsic_ssa_block;
     SSA_Block global_block;
 
-    SSA_Evaluation_Context* ssa_evaluation_context;
-
-    u64 pointer_providence_counter;
+    Evaluate_Context* evaluate_context;
 
     FILE* log_file;
     bool log_print;

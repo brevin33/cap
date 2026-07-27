@@ -27,4 +27,8 @@ char* utf8_to_str(utf8 str);
 
 u32 utf8_visual_len(utf8 str);
 
-void utf8_append_with_capacity(utf8* base, u32 base_capacity, utf8 str);
+void utf8_append_with_capacity(utf8* base, u32* capacity, utf8 str);
+
+utf8 utf8_slice(char* start, char* end);
+
+utf8 utf8_memory_as_hex(void* memory, u64 size);

@@ -8,6 +8,8 @@
 #include "string.h"
 #ifdef _WIN32
 #include "win_dirent.h"
+#define popen _popen
+#define pclose _pclose
 #else
 #include "dirent.h"
 #endif
@@ -69,21 +71,23 @@ typedef double f64;
             exit(1);               \
         }                          \
     } while (0)
-#define internal_compiler_error() \
-    do {                          \
-        log_output(log_debug);    \
-        debug_break();            \
-        exit(1);                  \
+#define internal_compiler_error()                                                                                                                            \
+    do {                                                                                                                                                     \
+        log_output(log_debug);                                                                                                                               \
+        printf("\033[31mInternal compiler error. Either you've found a compiler bug, or you've corrupted compiler memory during compile time execution.\n"); \
+        debug_break();                                                                                                                                       \
+        exit(1);                                                                                                                                             \
     } while (0)
 #else
 #define assert(cond) \
     do {             \
     } while (0)
 
-#define internal_compiler_error()                                                                                                                     \
-    do {                                                                                                                                              \
-        printf("Internal compiler error. Either you've found a coimpiler bug, or you've corrupted compiler memory during compile time execution.\n"); \
-        exit(1);                                                                                                                                      \
+#define internal_compiler_error()                                                                                                                            \
+    do {                                                                                                                                                     \
+        log_output(log_info);                                                                                                                                \
+        printf("\033[31mInternal compiler error. Either you've found a compiler bug, or you've corrupted compiler memory during compile time execution.\n"); \
+        exit(1);                                                                                                                                             \
     } while (0)
 
 #endif

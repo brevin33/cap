@@ -187,6 +187,7 @@ Tokens tokens_from_file(Cap_File* file) {
         // string
         else if (unicode == '"') {
             // TODO: parse string and handel formatting
+            assert(false);
         }
 
         // symbols

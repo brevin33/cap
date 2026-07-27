@@ -1,4 +1,5 @@
 #include "cap.h"
+#include "ssa.h"
 
 utf8 cap_file_get_line(Cap_File* file, u32 line) {
     u32 current_line = 1;
@@ -56,9 +57,12 @@ Cap_Folder cap_folder_create_from_path(utf8 path) {
                 char* file_contents_char = read_file(filepath);
                 utf8 file_contents = utf8_str(file_contents_char);
                 if (file_contents.data == NULL) continue;
+                u32 filepath_len = strlen(filepath);
+                char* file_path_copy = alloc(filepath_len + 1);
+                memcpy(file_path_copy, filepath, filepath_len + 1);
 
                 Cap_File file = {0};
-                file.path = utf8_str(filepath);
+                file.path = utf8_str(file_path_copy);
                 file.contents = file_contents;
                 file.tokens = tokens_from_file(&file);
                 if (log_has_error()) continue;
@@ -164,7 +168,11 @@ Cap_Folder cap_folder_create_from_path(utf8 path) {
     utf8 str = ssa_recursive_get_block_strings(block);
     printf("%.*s", utf8_fmt(str));
 
-    ssa_type_check_block(block);
+    if (!ssa_type_check_block(block)) return folder;
+    if (!ssa_type_check_builds()) return folder;
+
+    if (!ssa_run_block(block)) return folder;
+    if (!ssa_run_builds()) return folder;
 
     return folder;
 }
