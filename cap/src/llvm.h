@@ -1,37 +1,38 @@
 #pragma once
 
+#include "ssa.h"
 #include "util/util.h"
 
-typedef struct LLVM_Block LLVM_Block;
-typedef struct LLVM_Function LLVM_Function;
 typedef struct SSA SSA;
 typedef struct SSA_Block SSA_Block;
 typedef struct Function Function;
+typedef struct Function_Context Function_Context;
 
-// add to global scope
-// @empty = internal global {} zeroinitializer
+utf8 llvm_unique_name();
 
-struct LLVM_Function {
-    LLVM_Block* blocks;
-    u32 blocks_count;
-    u32 blocks_capacity;
-};
+utf8 llvm_gernerate_ir_exe(Function* function);
 
-struct LLVM_Block {
-    utf8* statements;
-    u32 statements_count;
-    u32 statements_capacity;
-};
+utf8 llvm_type(Type* type);
+utf8 llvm_ssa_name(SSA* ssa);
+utf8 llvm_function_name(Function_Context* function_context);
+utf8 llvm_ssa_set_global_name(SSA* ssa);
+utf8 llvm_block_name(SSA_Block* block);
 
-utf8 llvm_ssa_to_name(SSA* ssa);
-utf8 llvm_block_to_name(SSA_Block* block, char* buffer);
+void llvm_ssa_set_name(SSA* ssa, utf8 name);
+void llvm_ssa_reset_name(SSA* ssa);
 
-utf8 llvm_ssa_to_statement(SSA* ssa, utf8* buffer, u32* buffer_capacity);
+bool llvm_type_exists_at_runtime(Type* type);
+bool llvm_ssa_exists_at_runtime(SSA* ssa);
 
-void llvm_append_assign_empty_value(utf8 name, utf8* buffer, u32* buffer_capacity);
+utf8 llvm_function(Function* function, Function_Context* function_context, utf8_builder* builder);
 
-utf8 llvm_global_scope_to_llvm(utf8* buffer, u32* buffer_capacity);
+utf8 llvm_statement(SSA* ssa, utf8_builder* builder);
+utf8 llvm_global_scope(utf8_builder* builder);
+utf8 llvm_function_setup(SSA_Block* block, utf8_builder* builder);
+utf8 llvm_global_setup(SSA_Block* block, utf8_builder* builder);
+utf8 llvm_function_body(SSA_Block* block, utf8_builder* builder);
+utf8 llvm_build_required_functions(SSA_Block* block, utf8_builder* builder);
 
-utf8 llvm_block_to_llvm(SSA_Block* block, utf8* buffer, u32* buffer_capacity);
-utf8 llvm_block_setup(SSA_Block* block, utf8* buffer, u32* buffer_capacity);
-utf8 llvm_block_body(SSA_Block* block, utf8* buffer, u32* buffer_capacity);
+void llvm_branch_to_block(SSA_Block* block, utf8_builder* builder);
+
+void llvm_generate_exe(utf8 llvm_ir, utf8 exe_path);

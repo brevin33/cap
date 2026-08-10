@@ -55,9 +55,6 @@ struct Context {
     SSA_Block global_block;
 
     Evaluate_Context* evaluate_context;
-
-    FILE* log_file;
-    bool log_print;
 };
 
 extern Context context;

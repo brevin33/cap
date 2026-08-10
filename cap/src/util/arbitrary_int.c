@@ -1,85 +1,102 @@
 #include "util.h"
 
 void* arbitrary_int_cast(void* value, u64 current_bits, u64 new_bits, bool is_signed) {
-    u64 new_size = (new_bits + 7) / 8;
-    void* result = alloc(new_size);
-    u64 current_size = (current_bits + 7) / 8;
-    u64 copy_size = current_size < new_size ? current_size : new_size;
-    memcpy(result, value, copy_size);
-
-    // Extract the true sign bit at bit position (current_bits - 1)
-    u64 sign_bit_byte_idx = (current_bits - 1) / 8;
-    u64 sign_bit_pos = (current_bits - 1) % 8;
-    u8 sign_bit = (((u8*)value)[sign_bit_byte_idx] >> sign_bit_pos) & 0x1;
-
-    if (is_signed && new_size > current_size) {
-        u8 fill = sign_bit ? 0xFF : 0x00;
-        memset((u8*)result + current_size, fill, new_size - current_size);
+    u64 new_size_bytes = (new_bits + 7) / 8;
+    void* result = alloc(new_size_bytes);
+    bool is_negative = is_signed && bit_get(value, current_bits - 1);
+    u64 smallest_bits = current_bits < new_bits ? current_bits : new_bits;
+    for (u64 i = 0; i < smallest_bits; i++) {
+        bool bit = bit_get(value, i);
+        bit_set(result, i, bit);
     }
-
-    // Mask off unused bits in the last byte of result
-    if (new_bits % 8 != 0) {
-        u64 last_byte_idx = new_size - 1;
-        u8 mask = (1 << (new_bits % 8)) - 1;
-        ((u8*)result)[last_byte_idx] &= mask;
+    for (u64 i = current_bits; i < new_bits; i++) {
+        bit_set(result, i, is_negative);
     }
-
+    bit_set(result, new_bits - 1, is_negative);
+    for (u64 i = new_bits; i < new_size_bytes * 8; i++) {
+        bit_set(result, i, is_negative);
+    }
     return result;
 }
 
-f64 arbitrary_int_cast_to_float(void* value, u64 current_bits, bool is_signed) {
-    f64 result = 0.0;
-    u64 byte_count = (current_bits + 7) / 8;
+utf8 arbitrary_int_to_string(void* value, u64 bits, bool is_signed) {
+    bool is_negative = is_signed && bit_get(value, bits - 1);
+    u64 digit_count = 0;
+    u64 digit_capacity = 0;
+    char* digits = NULL;
 
-    if (is_signed) {
-        // Check sign bit
-        u8 sign_byte_idx = (current_bits - 1) / 8;
-        u8 sign_bit_idx = (current_bits - 1) % 8;
-        bool is_negative = (((u8*)value)[sign_byte_idx] >> sign_bit_idx) & 1;
+    void* temp = alloc((bits + 7) / 8);
+    memcpy(temp, value, (bits + 7) / 8);
 
-        if (is_negative) {
-            // Two's complement: negate and make positive
-            u8 temp[256];
-            memcpy(temp, value, byte_count);
-
-            // Invert all bits up to current_bits
-            for (u64 i = 0; i < byte_count; i++) {
-                temp[i] = ~temp[i];
-            }
-            // Clear bits beyond current_bits
-            u8 last_byte_bits = current_bits % 8;
-            if (last_byte_bits) {
-                temp[byte_count - 1] &= (1 << last_byte_bits) - 1;
-            }
-
-            // Add 1
-            u64 carry = 1;
-            for (u64 i = 0; i < byte_count && carry; i++) {
-                u16 sum = (u16)temp[i] + carry;
-                temp[i] = sum & 0xFF;
-                carry = sum >> 8;
-            }
-
-            // Convert to f64 and negate
-            result = 0.0;
-            for (u64 i = byte_count; i > 0; i--) {
-                result = result * 256.0 + (f64)temp[i - 1];
-            }
-            result = -result;
-        } else {
-            // Positive: convert directly
-            result = 0.0;
-            for (u64 i = byte_count; i > 0; i--) {
-                result = result * 256.0 + (f64)((u8*)value)[i - 1];
-            }
+    if (is_negative) {
+        void* negated = temp;
+        for (u64 i = 0; i < bits; i++) {
+            bit_set(negated, i, !bit_get(negated, i));
         }
-    } else {
-        // Unsigned: convert directly
-        result = 0.0;
-        for (u64 i = byte_count; i > 0; i--) {
-            result = result * 256.0 + (f64)((u8*)value)[i - 1];
+        bool carry = true;
+        for (u64 i = 0; i < bits && carry; i++) {
+            bool bit = bit_get(negated, i);
+            bit_set(negated, i, !bit);
+            carry = bit;
+        }
+        memcpy(temp, negated, (bits + 7) / 8);
+    }
+
+    bool is_zero = true;
+    for (u64 i = 0; i < bits; i++) {
+        if (bit_get(temp, i)) {
+            is_zero = false;
+            break;
+        }
+    }
+    if (is_zero) return utf8_str("0");
+    while (!is_zero) {
+        u64 remainder = 0;
+        for (i64 i = bits - 1; i >= 0; i--) {
+            u64 bit = bit_get(temp, i) ? 1 : 0;
+            remainder = (remainder << 1) | bit;
+            bit_set(temp, i, (remainder / 10) & 1);
+            remainder %= 10;
+        }
+        char digit = '0' + remainder;
+        ptr_append(digits, digit_count, digit_capacity, digit);
+        is_zero = true;
+        for (u64 i = 0; i < bits; i++) {
+            if (bit_get(temp, i)) {
+                is_zero = false;
+                break;
+            }
         }
     }
 
+    utf8 result = {0};
+    result.data = alloc(digit_count + 1);
+    result.count = digit_count + is_negative;
+    char* buffer = result.data;
+    if (is_negative) {
+        buffer[0] = '-';
+        for (u64 i = 0; i < digit_count; i++) {
+            buffer[i + 1] = digits[digit_count - 1 - i];
+        }
+    } else {
+        for (u64 i = 0; i < digit_count; i++) {
+            buffer[i] = digits[digit_count - 1 - i];
+        }
+    }
+    return result;
+}
+
+f64 arbitrary_int_cast_to_float(void* value, u64 bits, bool is_signed) {
+    f64 result;
+    bool last_bit_set = bit_get(value, bits - 1);
+    if (is_signed) {
+        result = -last_bit_set;
+    } else {
+        result = last_bit_set;
+    }
+    for (i64 i = bits - 2; i >= 0; i--) {
+        bool bit = bit_get(value, i);
+        result = result * 2.0 + bit;
+    }
     return result;
 }

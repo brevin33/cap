@@ -28,12 +28,10 @@ typedef struct SSA_Underlying_Type SSA_Underlying_Type;
 typedef struct SSA_Argument_Type SSA_Argument_Type;
 typedef struct SSA_Parameter_Type SSA_Parameter_Type;
 typedef struct SSA_Default_Value SSA_Default_Value;
-typedef struct SSA_Struct_Type SSA_Struct_Type;
-typedef struct SSA_Struct_Value SSA_Struct_Value;
-typedef struct SSA_Struct_Index_Number SSA_Struct_Index_Number;
-typedef struct SSA_Struct_Type_Index_Number SSA_Struct_Type_Index_Number;
-typedef struct SSA_Struct_Index_Name SSA_Struct_Index_Name;
-typedef struct SSA_Struct_Type_Index_Name SSA_Struct_Type_Index_Name;
+typedef struct SSA_Return_Value SSA_Return_Value;
+typedef struct SSA_Return_Value_Type SSA_Return_Value_Type;
+typedef struct SSA_Return_Value_Index SSA_Return_Value_Index;
+typedef struct SSA_Return_Value_Type_Index SSA_Return_Value_Type_Index;
 
 typedef union SSA_Data SSA_Data;
 typedef struct SSA_Per_Function_Context_Values SSA_Per_Function_Context_Values;
@@ -48,6 +46,7 @@ typedef struct SSA_List SSA_List;
 
 typedef struct Function Function;
 
+typedef struct Function_Instance_Data Function_Instance_Data;
 typedef struct Function_Internal Function_Internal;
 typedef struct Function_Intrinsic Function_Intrinsic;
 
@@ -56,82 +55,23 @@ typedef union Function_Data Function_Data;
 typedef struct Type Type;
 typedef union Type_Data Type_Data;
 
+typedef struct Type_Return_Value Type_Return_Value;
 typedef struct Type_Int Type_Int;
 typedef struct Type_Uint Type_Uint;
 typedef struct Type_Float Type_Float;
 typedef struct Type_Ptr Type_Ptr;
-typedef struct Type_Struct Type_Struct;
-typedef struct Type_Optional Type_Optional;
-
-typedef struct Allocator Allocator;
-
-typedef struct Allocator_Value Allocator_Value;
-
-typedef struct Allocator_Constraint Allocator_Constraint;
-typedef union Allocator_Constraint_Data Allocator_Constraint_Data;
-typedef struct Allocator_Constraint_Function_Parameter Allocator_Constraint_Function_Parameter;
-typedef struct Allocator_Constraint_Function_Return Allocator_Constraint_Function_Return;
 
 typedef struct Function_Context Function_Context;
 typedef struct Evaluate_Context Evaluate_Context;
 
 typedef struct Interpreter_Function_Context Interpreter_Function_Context;
-typedef struct Interpreter_Stack_Alloc_Pair Interpreter_Stack_Alloc_Pair;
+typedef struct Interpreter_SSA_Value_Pair Interpreter_SSA_Value_Pair;
 
 typedef struct All_Function_Context All_Function_Context;
 
 typedef struct Infer_Context Infer_Context;
 
 typedef struct Log Log;
-
-typedef enum Allocator_Value_Kind {
-    Allocator_Value_Kind_Invalid = 0,
-    Allocator_Value_Kind_Unspecified,
-    Allocator_Value_Kind_Unknown,
-    Allocator_Value_Kind_SSA,
-    Allocator_Value_Kind_Global,
-    Allocator_Value_Kind_Stack,
-} Allocator_Value_Kind;
-
-struct Allocator_Value {
-    Allocator_Value_Kind kind;
-    SSA* ssa;  // NULL if global or stack
-};
-
-typedef enum Allocator_Constraint_Kind {
-    Allocator_Constraint_Kind_Invalid = 0,
-    Allocator_Constraint_Kind_Function_Parameter,
-    Allocator_Constraint_Kind_Function_Return,
-} Allocator_Constraint_Kind;
-
-struct Allocator_Constraint_Function_Parameter {
-    Function_Context* function_context;
-    u32 parameter_index;
-    u32 parameter_allocator_index;
-};
-
-struct Allocator_Constraint_Function_Return {
-    Function_Context* function_context;
-    u32 return_index;
-    u32 return_allocator_index;
-};
-
-union Allocator_Constraint_Data {
-    Allocator_Constraint_Function_Parameter function_parameter;
-    Allocator_Constraint_Function_Return function_return;
-};
-
-struct Allocator_Constraint {
-    Allocator_Constraint_Kind kind;
-    Allocator_Constraint_Data data;
-};
-
-struct Allocator {
-    Allocator_Value value;
-    Allocator_Constraint* constraints;
-    u32 constraints_count;
-    u32 constraints_capacity;
-};
 
 typedef enum Type_Kind {
     Type_Kind_Invalid = 0,
@@ -145,14 +85,12 @@ typedef enum Type_Kind {
     Type_Kind_Function,
     Type_Kind_Ptr,
     Type_Kind_Call_Setup,
-    Type_Kind_Struct,
-    Type_Kind_Optional,
+    Type_Kind_Return_Value,
 } Type_Kind;
 
-struct Type_Struct {
-    Type** fields;
-    utf8* field_names;
-    u32 field_count;
+struct Type_Return_Value {
+    Type** types;
+    u32 types_count;
 };
 
 struct Type_Int {
@@ -169,11 +107,6 @@ struct Type_Float {
 
 struct Type_Ptr {
     Type* type;
-    Allocator** allocator;
-};
-
-struct Type_Optional {
-    Type* type;
 };
 
 union Type_Data {
@@ -181,13 +114,46 @@ union Type_Data {
     Type_Uint uint;
     Type_Float float_;
     Type_Ptr ptr;
-    Type_Struct struct_;
-    Type_Optional optional;
+    Type_Return_Value return_value;
 };
 
 struct Type {
     Type_Kind kind;
     Type_Data data;
+};
+
+struct Function_Context {
+    SSA** arguments;
+    SSA** parameters;
+    u32 parameters_count;
+
+    SSA* return_type;
+
+    bool dont_need_to_build;
+    bool already_built;
+};
+
+struct Evaluate_Context {
+    All_Function_Context* function_context_stack;
+    u32 function_context_stack_count;
+    u32 function_context_stack_capacity;
+    bool speculative;
+};
+
+struct Interpreter_SSA_Value_Pair {
+    SSA* ssa;
+    void* value;
+};
+
+struct Interpreter_Function_Context {
+    Interpreter_SSA_Value_Pair* ssa_value_pairs;
+    u32 ssa_value_pairs_count;
+    u32 ssa_value_pairs_capacity;
+};
+
+struct All_Function_Context {
+    Function_Context* function_context;
+    Interpreter_Function_Context* interpreter_function_context;
 };
 
 struct SSA_List {
@@ -253,6 +219,11 @@ union Function_Data {
     Function_Intrinsic intrinsic;
 };
 
+struct Function_Instance_Data {
+    Function_Context* function_context;
+    utf8 codegen_function;
+};
+
 struct Function {
     utf8 name;
     SSA_Block setup_block;
@@ -261,6 +232,10 @@ struct Function {
     u32 parameter_count;
     Function_Kind kind;
     Function_Data data;
+
+    Function_Instance_Data* instance_data;
+    u32 instance_data_count;
+    u32 instance_data_capacity;
 };
 
 typedef enum SSA_Kind {
@@ -296,12 +271,11 @@ typedef enum SSA_Kind {
     SSA_Kind_Pointer_Type,
     SSA_Kind_Underlying_Type,
     SSA_Kind_Default_Value,
-    SSA_Kind_Struct_Type,
-    SSA_Kind_Struct_Value,
-    SSA_Kind_Struct_Index_Number,
-    SSA_Kind_Struct_Type_Index_Number,
-    SSA_Kind_Struct_Index_Name,
-    SSA_Kind_Struct_Type_Index_Name,
+    SSA_Kind_Return_Value,
+    SSA_Kind_Return_Value_Type,
+    SSA_Kind_Return_Value_Index,
+    SSA_Kind_Return_Value_Type_Index,
+    SSA_Kind_Terminate_Global_Scope,
 } SSA_Kind;
 
 struct SSA_Int_Literal {
@@ -393,35 +367,24 @@ struct SSA_Default_Value {
     SSA* type;
 };
 
-struct SSA_Struct_Type {
-    SSA** field_types;
-    utf8* field_names;
-    u32 field_count;
+struct SSA_Return_Value {
+    SSA** values;
+    u32 values_count;
 };
 
-struct SSA_Struct_Value {
-    SSA** field_values;
-    u32 field_count;
+struct SSA_Return_Value_Type {
+    SSA** types;
+    u32 types_count;
 };
 
-struct SSA_Struct_Index_Number {
-    SSA* struct_value;
+struct SSA_Return_Value_Index {
+    SSA* return_value;
     u32 index;
 };
 
-struct SSA_Struct_Type_Index_Number {
-    SSA* struct_type;
+struct SSA_Return_Value_Type_Index {
+    SSA* return_value_type;
     u32 index;
-};
-
-struct SSA_Struct_Index_Name {
-    SSA* struct_value;
-    utf8 index_name;
-};
-
-struct SSA_Struct_Type_Index_Name {
-    SSA* struct_type;
-    utf8 index_name;
 };
 
 union SSA_Data {
@@ -445,12 +408,10 @@ union SSA_Data {
     SSA_Argument_Type argument_type;
     SSA_Parameter_Type parameter_type;
     SSA_Default_Value default_value;
-    SSA_Struct_Type struct_type;
-    SSA_Struct_Value struct_value;
-    SSA_Struct_Index_Number struct_index_number;
-    SSA_Struct_Type_Index_Number struct_type_index_number;
-    SSA_Struct_Index_Name struct_index_name;
-    SSA_Struct_Type_Index_Name struct_type_index_name;
+    SSA_Return_Value return_value;
+    SSA_Return_Value_Type return_value_type;
+    SSA_Return_Value_Index return_value_index;
+    SSA_Return_Value_Type_Index return_value_type_index;
 };
 
 #define SSA_SUCCESS_VOID_VALUE ((void*)1)
@@ -480,36 +441,6 @@ struct SSA {
     Ast* ast;
 };
 
-struct Function_Context {
-    SSA** arguments;
-    SSA** parameters;
-    u32 parameters_count;
-
-    SSA* return_type;
-};
-
-struct Evaluate_Context {
-    All_Function_Context* function_context_stack;
-    u32 function_context_stack_count;
-    u32 function_context_stack_capacity;
-};
-
-struct Interpreter_Stack_Alloc_Pair {
-    SSA* ssa;
-    void* memory;
-};
-
-struct Interpreter_Function_Context {
-    Interpreter_Stack_Alloc_Pair* stack_alloc_memory_map;
-    u32 stack_alloc_memory_map_count;
-    u32 stack_alloc_memory_map_capacity;
-};
-
-struct All_Function_Context {
-    Function_Context* function_context;
-    Interpreter_Function_Context* interpreter_function_context;
-};
-
 struct Infer_Context {
     SSA** arguments;
     u32 arguments_count;
@@ -523,7 +454,6 @@ struct Infer_Context {
 };
 
 SSA* ssa_add_to_block(SSA ssa, SSA_Block* block);
-SSA* ssa_ast_to_ssa_non_ref(Ast* ast, SSA_Block* block);
 SSA* ssa_ast_to_ssa(Ast* ast, SSA_Block* block);
 SSA* ssa_top_level_ast_to_ssa(Ast* ast, SSA_Block* block);
 void ssa_top_level_post_parse(SSA* ssa, SSA_Block* block);
@@ -547,21 +477,27 @@ bool ssa_type_check_call_float_type(SSA* ssa, Function_Context* function_context
 bool ssa_type_check_call_compile_to_llvm_ir(SSA* ssa, Function_Context* function_context, Function* function);
 
 void* ssa_evaluate(SSA* ssa);
+void* ssa_evaluate_speculative(SSA* ssa);
+
 Type* ssa_evaluate_type(SSA* ssa);
 Function* ssa_evaluate_function(SSA* ssa);
 Function_Context* ssa_evaluate_function_context(SSA* ssa);
 
+void* ssa_evaluate_interpreter_run(SSA* ssa);
+void* ssa_evaluate_interpreter_get_paired_value(SSA* ssa);
+void ssa_set_interpreter_paired_value(SSA* ssa, void* value);
+
 void ssa_cache_evaluated(SSA* ssa, void* value);
 bool ssa_already_evaluated(SSA* ssa, void** out_value);
 
-bool ssa_run(SSA* ssa);
-bool ssa_run_block(SSA_Block* block);
+void ssa_run_block_setup(SSA_Block* block);
+void* ssa_run_block_body(SSA_Block* block);
+void* ssa_run_block(SSA_Block* block, void** parameters, SSA* log_ssa);
 bool ssa_run_builds();
 
 SSA* ssa_stack_alloc(SSA* type, SSA* initial_value, SSA_Block* block, Ast* ast);
 SSA* ssa_store(SSA* value, SSA* address, SSA_Block* block, Ast* ast);
 SSA* ssa_load(SSA* address, SSA_Block* block, Ast* ast);
-SSA* ssa_load_if_ref(SSA* value, SSA_Block* block, Ast* ast);
 SSA* ssa_parameter(u32 index, SSA_Block* block, Ast* ast);
 SSA* ssa_argument(u32 index, SSA_Block* block, Ast* ast);
 SSA* ssa_function_declaration(SSA_Block* block, Ast* ast);
@@ -580,15 +516,11 @@ SSA* ssa_underlying_type(SSA* type, SSA_Block* block, Ast* ast);
 SSA* ssa_argument_type(u32 index, SSA_Block* block, Ast* ast);
 SSA* ssa_parameter_type(u32 index, SSA_Block* block, Ast* ast);
 SSA* ssa_default_value(SSA* type, SSA_Block* block, Ast* ast);
-SSA* ssa_struct_type(SSA** types, utf8* type_names, u32 types_count, SSA_Block* block, Ast* ast);
-SSA* ssa_no_field_name_struct_type(SSA** types, u32 types_count, SSA_Block* block, Ast* ast);
-SSA* ssa_struct_value(SSA** values, u32 values_count, SSA_Block* block, Ast* ast);
-SSA* ssa_struct_index_number(SSA* struct_value, u32 index, SSA_Block* block, Ast* ast);
-SSA* ssa_struct_type_index_number(SSA* struct_type, u32 index, SSA_Block* block, Ast* ast);
-SSA* ssa_struct_index_name(SSA* struct_value, utf8 index_name, SSA_Block* block, Ast* ast);
-SSA* ssa_struct_type_index_name(SSA* struct_type, utf8 index_name, SSA_Block* block, Ast* ast);
-
-SSA* ssa_ast_intrinsic(Ast_Intrinsic intrinsic);
+SSA* ssa_return_value(SSA** values, u32 values_count, SSA_Block* block, Ast* ast);
+SSA* ssa_return_value_type(SSA** types, u32 types_count, SSA_Block* block, Ast* ast);
+SSA* ssa_return_value_index(SSA* return_value, u32 index, SSA_Block* block, Ast* ast);
+SSA* ssa_return_value_type_index(SSA* return_value_type, u32 index, SSA_Block* block, Ast* ast);
+SSA* ssa_terminate_global_scope(SSA_Block* block);
 
 SSA* ssa_function_type();
 SSA* ssa_type_type();
@@ -617,40 +549,31 @@ utf8 ssa_kind_to_string(SSA_Kind kind);
 
 bool ssa_can_explicit_cast(Type* type, Type* cast_type);
 bool ssa_can_implicit_cast(Type* type, Type* cast_type);
-void ssa_cast_type_allocator(Type* type, Type* cast_type);
 void* ssa_cast_value(void* value, Type* value_type, Type* cast_type);
 
 bool ssa_compile_time_value_equal(void* value1, void* value2, Type* type);
 
 bool ssa_type_equal(Type* type1, Type* type2);
+i64 ssa_type_alignment(Type* type);
+i64 ssa_type_alignment_compile_time(Type* type);
 i64 ssa_type_size(Type* type);
 i64 ssa_type_size_compile_time(Type* type);
+i64 ssa_return_value_type_index_to_offset_compile_time(Type* type, i64 index);
+i64 ssa_return_value_type_index_to_offset(Type* type, i64 index);
 bool ssa_is_math_type(Type* type);
-bool ssa_struct_has_field_names(Type* type);
-
-bool ssa_type_allocator_valid(Type* type);
-void ssa_allocator_add_constraint(Allocator* allocator, Allocator_Constraint* constraint);
-bool ssa_merge_type_allocators(Type* type_1, Type* type_2, SSA* error_ssa);
-void ssa_set_all_allocators_to_unknown(Type* type);
-
-void ssa_type_init_allocator(Type* type);
-
-void ssa_type_set_allocator_function_return_full(Type* type);
-void ssa_type_set_allocator_function_call_return_full(Type* type, SSA* setup_ssa);
-void ssa_type_set_allocator_function_parameter_full(Type* type, u32 parameter_index);
-
-bool ssa_is_ref(SSA* ssa);
 
 bool ssa_infer_arguments(SSA** arguments, SSA** parameters, u32 arguments_count, SSA_Block* setup_block, All_Function_Context function_context, SSA* setup_ssa);
+Function_Instance_Data* ssa_can_use_previous_function_context(Function_Instance_Data* instance_data, Function* function);
 
 void ssa_add_interpreter_to_function_context();
-Interpreter_Function_Context* ssa_clear_interpreter_from_global_context();
-void ssa_add_interpreter_to_global_context(Interpreter_Function_Context* inter_function_context);
+void ssa_remove_interpreter_from_function_context();
 
-Function_Context* ssa_get_cache_function_context(SSA* ssa);
+All_Function_Context ssa_get_cache_function_context(SSA* ssa);
 All_Function_Context ssa_get_function_context();
+void ssa_push_function_context(All_Function_Context all);
 void ssa_pop_function_context();
-
 bool ssa_running_interpreter();
 
-void ssa_push_function_context(All_Function_Context all);
+SSA** ssa_get_all_ssa_of_kind(SSA_Block* block, SSA_Kind kind, u32* out_count);
+
+Function_Instance_Data* ssa_get_function_instance_data(Function* function, Function_Context* function_context);

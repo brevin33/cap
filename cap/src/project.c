@@ -164,6 +164,7 @@ Cap_Folder cap_folder_create_from_path(utf8 path) {
             ssa_top_level_post_parse(ssa, block);
         }
     }
+    ssa_terminate_global_scope(block);
 
     utf8 str = ssa_recursive_get_block_strings(block);
     printf("%.*s", utf8_fmt(str));
@@ -171,7 +172,6 @@ Cap_Folder cap_folder_create_from_path(utf8 path) {
     if (!ssa_type_check_block(block)) return folder;
     if (!ssa_type_check_builds()) return folder;
 
-    if (!ssa_run_block(block)) return folder;
     if (!ssa_run_builds()) return folder;
 
     return folder;

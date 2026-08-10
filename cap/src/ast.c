@@ -61,12 +61,13 @@ Ast ast_parameter(Tokens* tokens, Cap_File* file) {
     ast.file = file;
     ast.kind = Ast_Kind_Parameter;
 
-    Ast type = ast_expression(&tkns, file);
+    Ast type = ast_expression_non_ref(&tkns, file);
     if (type.kind == Ast_Kind_Invalid) return (Ast){0};
 
     Token token = tokens_get(tkns);
     ast_expect(token, Token_Kind_Identifier);
     utf8 name = token.data;
+    tokens_next(&tkns);
 
     ast.data.parameter.type = alloc(sizeof(Ast));
     *ast.data.parameter.type = type;
@@ -81,6 +82,7 @@ Ast ast_function_declaration(Tokens* tokens, Cap_File* file) {
     Tokens tkns = *tokens;
 
     Ast ast = {0};
+    ast.is_reference = true;
     ast.tokens = tkns;
     ast.file = file;
     ast.kind = Ast_Kind_Function_Declaration;
@@ -89,7 +91,7 @@ Ast ast_function_declaration(Tokens* tokens, Cap_File* file) {
     u32 return_types_count = 0;
     u32 return_types_capacity = 0;
     while (true) {
-        Ast type = ast_expression(&tkns, file);
+        Ast type = ast_expression_non_ref(&tkns, file);
         if (type.kind == Ast_Kind_Invalid) return (Ast){0};
         ptr_append(return_types, return_types_count, return_types_capacity, type);
         Token token = tokens_get(tkns);
@@ -211,7 +213,7 @@ Ast ast_return(Tokens* tokens, Cap_File* file) {
     u32 expressions_capacity = 0;
 
     while (true) {
-        Ast expression = ast_expression(&tkns, file);
+        Ast expression = ast_expression_non_ref(&tkns, file);
         if (expression.kind == Ast_Kind_Invalid) return (Ast){0};
         ptr_append(expressions, expressions_count, expressions_capacity, expression);
         token = tokens_get(tkns);
@@ -247,7 +249,7 @@ Ast ast_statement_starting_with_expression(Tokens* tokens, Cap_File* file) {
         if (lhs.kind == Ast_Kind_Invalid) return (Ast){0};
         token = tokens_get(tkns);
         if (token.kind == Token_Kind_Identifier) {
-            Ast variable_declaration = ast_variable_declaration(&tkns, file, &lhs);
+            Ast variable_declaration = ast_variable_declaration(&tkns, file, lhs);
             if (variable_declaration.kind == Ast_Kind_Invalid) return (Ast){0};
             lhs = variable_declaration;
         }
@@ -263,7 +265,7 @@ Ast ast_statement_starting_with_expression(Tokens* tokens, Cap_File* file) {
         u32 rhs_values_count = 0;
         u32 rhs_values_capacity = 0;
         while (true) {
-            Ast rhs = ast_expression(&tkns, file);
+            Ast rhs = ast_expression_non_ref(&tkns, file);
             if (rhs.kind == Ast_Kind_Invalid) return (Ast){0};
             ptr_append(rhs_values, rhs_values_count, rhs_values_capacity, rhs);
             token = tokens_get(tkns);
@@ -274,6 +276,15 @@ Ast ast_statement_starting_with_expression(Tokens* tokens, Cap_File* file) {
             log_msg_token("Expected exactly one or as many values on rhs as lhs when assigning", log_error, token, file);
             return (Ast){0};
         }
+
+        for (u32 i = 0; i < lhs_values_count; i++) {
+            Ast* lhs = &lhs_values[i];
+            if (!lhs->is_reference) {
+                log_msg_ast("Expected lhs value to be a reference", log_error, lhs);
+                return (Ast){0};
+            }
+        }
+
         Ast assign = {0};
         assign.kind = Ast_Kind_Assign;
         assign.data.assign.lhs = lhs_values;
@@ -307,6 +318,16 @@ Ast ast_scoped_statement(Tokens* tokens, Cap_File* file) {
         case Token_Kind_Return: {
             return ast_return(tokens, file);
         }
+        case Token_Kind_Paren_Open:
+        case Token_Kind_Int:
+        case Token_Kind_Float:
+        case Token_Kind_Function:
+        case Token_Kind_Int_Type:
+        case Token_Kind_Uint_Type:
+        case Token_Kind_Float_Type:
+        case Token_Kind_Void_Type:
+        case Token_Kind_Compile_To_LLVM_IR:
+        case Token_Kind_Type:
         case Token_Kind_Identifier: {
             return ast_statement_starting_with_expression(tokens, file);
         }
@@ -314,12 +335,9 @@ Ast ast_scoped_statement(Tokens* tokens, Cap_File* file) {
         case Token_Kind_Invalid:
         case Token_Kind_End_Statement:
         case Token_Kind_End_File:
-        case Token_Kind_Int:
-        case Token_Kind_Float:
         case Token_Kind_Scope_Start:
         case Token_Kind_Scope_End:
         case Token_Kind_Assign:
-        case Token_Kind_Paren_Open:
         case Token_Kind_Paren_Close:
         case Token_Kind_Comma: {
             log_msg_token("Unexpected token when parsing scoped statement", log_error, token, file);
@@ -334,6 +352,16 @@ Ast ast_top_level_statement(Tokens* tokens, Cap_File* file) {
         case Token_Kind_Build: {
             return ast_build(tokens, file);
         }
+        case Token_Kind_Paren_Open:
+        case Token_Kind_Int:
+        case Token_Kind_Float:
+        case Token_Kind_Type:
+        case Token_Kind_Function:
+        case Token_Kind_Int_Type:
+        case Token_Kind_Uint_Type:
+        case Token_Kind_Float_Type:
+        case Token_Kind_Void_Type:
+        case Token_Kind_Compile_To_LLVM_IR:
         case Token_Kind_Identifier: {
             return ast_statement_starting_with_expression(tokens, file);
         }
@@ -341,12 +369,9 @@ Ast ast_top_level_statement(Tokens* tokens, Cap_File* file) {
         case Token_Kind_Invalid:
         case Token_Kind_End_Statement:
         case Token_Kind_End_File:
-        case Token_Kind_Int:
-        case Token_Kind_Float:
         case Token_Kind_Scope_Start:
         case Token_Kind_Scope_End:
         case Token_Kind_Assign:
-        case Token_Kind_Paren_Open:
         case Token_Kind_Paren_Close:
         case Token_Kind_Comma: {
             log_msg_token("Unexpected token when parsing top level statement", log_error, token, file);
@@ -387,10 +412,24 @@ utf8 ast_kind_to_string(Ast_Kind kind) {
             return utf8_str("Ast_Kind_Argument_List");
         case Ast_Kind_Build:
             return utf8_str("Ast_Kind_Build");
-        case Ast_Kind_Intrinsic:
-            return utf8_str("Ast_Kind_Intrinsic");
         case Ast_Kind_Assign:
             return utf8_str("Ast_Kind_Assign");
+        case Ast_Kind_Load:
+            return utf8_str("Ast_Kind_Load");
+        case Ast_Kind_Intrinsic_Int_Type:
+            return utf8_str("Ast_Kind_Intrinsic_Int_Type");
+        case Ast_Kind_Intrinsic_Uint_Type:
+            return utf8_str("Ast_Kind_Intrinsic_Uint_Type");
+        case Ast_Kind_Intrinsic_Float_Type:
+            return utf8_str("Ast_Kind_Intrinsic_Float_Type");
+        case Ast_Kind_Intrinsic_Compile_To_LLVM_IR:
+            return utf8_str("Ast_Kind_Intrinsic_Compile_To_LLVM_IR");
+        case Ast_Kind_Intrinsic_Type:
+            return utf8_str("Ast_Kind_Intrinsic_Type");
+        case Ast_Kind_Intrinsic_Function:
+            return utf8_str("Ast_Kind_Intrinsic_Function");
+        case Ast_Kind_Intrinsic_Void:
+            return utf8_str("Ast_Kind_Intrinsic_Void");
     }
 }
 
@@ -431,7 +470,7 @@ Ast ast_float(Tokens* tokens, Cap_File* file) {
     tokens_next(&tkns);
 
     ast.data.float_.value = strtod(token.data.data, NULL);
-    if (errno != ERANGE) {
+    if (errno == ERANGE) {
         errno = 0;
         log_msg_token("Failed to parse into float", log_error, token, file);
         return (Ast){0};
@@ -446,6 +485,7 @@ Ast ast_variable(Tokens* tokens, Cap_File* file) {
     Tokens tkns = *tokens;
 
     Ast ast = {0};
+    ast.is_reference = true;
     ast.tokens = tkns;
     ast.file = file;
     ast.kind = Ast_Kind_Variable;
@@ -461,11 +501,13 @@ Ast ast_variable(Tokens* tokens, Cap_File* file) {
     return ast;
 }
 
-Ast ast_variable_declaration(Tokens* tokens, Cap_File* file, Ast* type) {
+Ast ast_variable_declaration(Tokens* tokens, Cap_File* file, Ast type) {
+    type = ast_load_if_ref(type);
     Tokens tkns = *tokens;
 
     Ast ast = {0};
-    ast.tokens = type->tokens;
+    ast.is_reference = true;
+    ast.tokens = type.tokens;
     ast.file = file;
     ast.kind = Ast_Kind_Variable_Declaration;
 
@@ -474,7 +516,7 @@ Ast ast_variable_declaration(Tokens* tokens, Cap_File* file, Ast* type) {
     tokens_next(&tkns);
 
     ast.data.variable_declaration.type = alloc(sizeof(Ast));
-    *ast.data.variable_declaration.type = *type;
+    *ast.data.variable_declaration.type = type;
     ast.data.variable_declaration.name = token.data;
 
     ast.tokens.count = tkns.data - ast.tokens.data;
@@ -482,16 +524,31 @@ Ast ast_variable_declaration(Tokens* tokens, Cap_File* file, Ast* type) {
     return ast;
 }
 
-Ast ast_call(Tokens* tokens, Cap_File* file, Ast* callee) {
+Ast ast_load_if_ref(Ast possible_ref) {
+    if (possible_ref.is_reference) {
+        Ast load = {0};
+        load.file = possible_ref.file;
+        load.tokens = possible_ref.tokens;
+        load.kind = Ast_Kind_Load;
+        load.data.load.address = alloc(sizeof(Ast));
+        *load.data.load.address = possible_ref;
+        return load;
+    }
+    return possible_ref;
+}
+
+Ast ast_call(Tokens* tokens, Cap_File* file, Ast callee) {
+    callee = ast_load_if_ref(callee);
+
     Tokens tkns = *tokens;
 
     Ast ast = {0};
-    ast.tokens = callee->tokens;
+    ast.tokens = callee.tokens;
     ast.file = file;
     ast.kind = Ast_Kind_Call;
 
     ast.data.call.callee = alloc(sizeof(Ast));
-    *ast.data.call.callee = *callee;
+    *ast.data.call.callee = callee;
 
     Ast argument_list = ast_argument_list(&tkns, file);
     if (argument_list.kind == Ast_Kind_Invalid) return (Ast){0};
@@ -521,7 +578,7 @@ Ast ast_argument_list(Tokens* tokens, Cap_File* file) {
     token = tokens_get(tkns);
     if (token.kind != Token_Kind_Paren_Close) {
         while (true) {
-            Ast argument = ast_expression(&tkns, file);
+            Ast argument = ast_expression_non_ref(&tkns, file);
             if (argument.kind == Ast_Kind_Invalid) return (Ast){0};
             ptr_append(ast.data.argument_list.arguments, ast.data.argument_list.arguments_count, ast_arguments_capacity, argument);
 
@@ -573,6 +630,13 @@ Ast ast_binary_operation(Tokens* tokens, Cap_File* file, Ast* lhs, Ast* rhs, Tok
 
 static i32 _get_precedence(Token_Kind kind) {
     switch (kind) {
+        case Token_Kind_Type:
+        case Token_Kind_Function:
+        case Token_Kind_Int_Type:
+        case Token_Kind_Uint_Type:
+        case Token_Kind_Float_Type:
+        case Token_Kind_Void_Type:
+        case Token_Kind_Compile_To_LLVM_IR:
         case Token_Kind_Identifier:
         case Token_Kind_Invalid:
         case Token_Kind_End_Statement:
@@ -610,6 +674,19 @@ static Ast ast_expression_value_paren_open(Tokens* tokens, Cap_File* file) {
     return expression;
 }
 
+static Ast ast_intrinsic(Tokens* tokens, Cap_File* file, Ast_Kind kind) {
+    Tokens tkns = *tokens;
+    Ast ast = {0};
+    ast.kind = kind;
+    ast.tokens = tkns;
+    ast.file = file;
+    ast.kind = kind;
+    tokens_next(&tkns);
+    ast.tokens.count = tkns.data - ast.tokens.data;
+    *tokens = tkns;
+    return ast;
+}
+
 static Ast ast_expression_value(Tokens* tokens, Cap_File* file) {
     Token token = tokens_get(*tokens);
     switch (token.kind) {
@@ -624,6 +701,27 @@ static Ast ast_expression_value(Tokens* tokens, Cap_File* file) {
         }
         case Token_Kind_Paren_Open: {
             return ast_expression_value_paren_open(tokens, file);
+        }
+        case Token_Kind_Type: {
+            return ast_intrinsic(tokens, file, Ast_Kind_Intrinsic_Type);
+        }
+        case Token_Kind_Function: {
+            return ast_intrinsic(tokens, file, Ast_Kind_Intrinsic_Function);
+        }
+        case Token_Kind_Int_Type: {
+            return ast_intrinsic(tokens, file, Ast_Kind_Intrinsic_Int_Type);
+        }
+        case Token_Kind_Uint_Type: {
+            return ast_intrinsic(tokens, file, Ast_Kind_Intrinsic_Uint_Type);
+        }
+        case Token_Kind_Float_Type: {
+            return ast_intrinsic(tokens, file, Ast_Kind_Intrinsic_Float_Type);
+        }
+        case Token_Kind_Void_Type: {
+            return ast_intrinsic(tokens, file, Ast_Kind_Intrinsic_Void);
+        }
+        case Token_Kind_Compile_To_LLVM_IR: {
+            return ast_intrinsic(tokens, file, Ast_Kind_Intrinsic_Compile_To_LLVM_IR);
         }
         case Token_Kind_Invalid:
         case Token_Kind_End_Statement:
@@ -642,7 +740,7 @@ static Ast ast_expression_value(Tokens* tokens, Cap_File* file) {
     }
 }
 
-static Ast ast_expression_mono_operator(Tokens* tokens, Cap_File* file, Ast* lhs, bool* out_found_operator) {
+static Ast ast_expression_mono_operator(Tokens* tokens, Cap_File* file, Ast lhs, bool* out_found_operator) {
     Tokens tkns = *tokens;
     Token token = tokens_get(tkns);
     *out_found_operator = true;
@@ -650,6 +748,13 @@ static Ast ast_expression_mono_operator(Tokens* tokens, Cap_File* file, Ast* lhs
         case Token_Kind_Paren_Open: {
             return ast_call(tokens, file, lhs);
         }
+        case Token_Kind_Type:
+        case Token_Kind_Function:
+        case Token_Kind_Int_Type:
+        case Token_Kind_Uint_Type:
+        case Token_Kind_Float_Type:
+        case Token_Kind_Void_Type:
+        case Token_Kind_Compile_To_LLVM_IR:
         case Token_Kind_Invalid:
         case Token_Kind_Identifier:
         case Token_Kind_End_Statement:
@@ -676,7 +781,7 @@ static Ast _ast_expression(Tokens* tokens, Cap_File* file, i32 precedence) {
 
     while (true) {
         bool found_mono_operator = false;
-        Ast mono_operator = ast_expression_mono_operator(&tkns, file, &lhs, &found_mono_operator);
+        Ast mono_operator = ast_expression_mono_operator(&tkns, file, lhs, &found_mono_operator);
         if (found_mono_operator) {
             if (mono_operator.kind == Ast_Kind_Invalid) return (Ast){0};
             lhs = mono_operator;
@@ -705,6 +810,11 @@ static Ast _ast_expression(Tokens* tokens, Cap_File* file, i32 precedence) {
 
         lhs = binary_operation;
     }
+}
+
+Ast ast_expression_non_ref(Tokens* tokens, Cap_File* file) {
+    Ast expr = ast_expression(tokens, file);
+    return ast_load_if_ref(expr);
 }
 
 Ast ast_expression(Tokens* tokens, Cap_File* file) {
@@ -748,29 +858,15 @@ Ast ast_create_from_file(Cap_File* file) {
     return ast;
 }
 
-static void _ast_add_intrinsic(const char* name, Ast_Intrinsic intrinsic) {
-    Ast* ast = alloc(sizeof(Ast));
-    ast->kind = Ast_Kind_Intrinsic;
-    ast->data.intrinsic = intrinsic;
-    Scope_Variable* var = ast_add_variable_to_scope(&context.intrinsic_scope, utf8_str(name), ast);
-    assert(var != NULL);
-}
-
-void ast_setup_intrinsics() {
-    _ast_add_intrinsic("int_type", Ast_Intrinsic_Int_Type);
-    _ast_add_intrinsic("uint_type", Ast_Intrinsic_Uint_Type);
-    _ast_add_intrinsic("float_type", Ast_Intrinsic_Float_Type);
-    _ast_add_intrinsic("compile_to_llvm_ir", Ast_Intrinsic_Compile_To_LLVM_IR);
-    _ast_add_intrinsic("type", Ast_Intrinsic_Type);
-    _ast_add_intrinsic("void", Ast_Intrinsic_Void);
-    _ast_add_intrinsic("int_literal", Ast_Intrinsic_Int_Literal);
-    _ast_add_intrinsic("float_literal", Ast_Intrinsic_Float_Literal);
-    _ast_add_intrinsic("function", Ast_Intrinsic_Function);
-}
-
 bool ast_resolve_variables(Ast* ast, Scope* scope) {
     switch (ast->kind) {
-        case Ast_Kind_Intrinsic:
+        case Ast_Kind_Intrinsic_Int_Type:
+        case Ast_Kind_Intrinsic_Uint_Type:
+        case Ast_Kind_Intrinsic_Float_Type:
+        case Ast_Kind_Intrinsic_Compile_To_LLVM_IR:
+        case Ast_Kind_Intrinsic_Type:
+        case Ast_Kind_Intrinsic_Function:
+        case Ast_Kind_Intrinsic_Void:
         case Ast_Kind_Float:
         case Ast_Kind_Int: {
             return true;
@@ -911,9 +1007,21 @@ bool ast_resolve_variables(Ast* ast, Scope* scope) {
         }
         case Ast_Kind_Assign: {
             Ast* lhs = ast->data.assign.lhs;
+            for (u32 i = 0; i < ast->data.assign.lhs_count; i++) {
+                Ast* lhs = &ast->data.assign.lhs[i];
+                if (!ast_resolve_variables(lhs, scope)) return false;
+            }
+
             Ast* rhs = ast->data.assign.rhs;
-            if (!ast_resolve_variables(lhs, scope)) return false;
-            if (!ast_resolve_variables(rhs, scope)) return false;
+            for (u32 i = 0; i < ast->data.assign.rhs_count; i++) {
+                Ast* rhs = &ast->data.assign.rhs[i];
+                if (!ast_resolve_variables(rhs, scope)) return false;
+            }
+            return true;
+        }
+        case Ast_Kind_Load: {
+            Ast* address = ast->data.load.address;
+            if (!ast_resolve_variables(address, scope)) return false;
             return true;
         }
     }

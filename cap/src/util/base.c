@@ -34,3 +34,21 @@ f64 get_time_in_seconds(void) {
     return (f64)ts.tv_sec + (f64)ts.tv_nsec / 1000000000.0;
 }
 #endif
+
+bool bit_get(const void* data, u32 bit_index) {
+    u32 byte_index = bit_index / 8;
+    u32 bit_offset = bit_index % 8;
+    u8 byte = ((const u8*)data)[byte_index];
+    return ((byte >> bit_offset) & 1u) != 0;
+}
+
+void bit_set(void* data, u32 bit_index, bool value) {
+    u32 byte_index = bit_index / 8;
+    u32 bit_offset = bit_index % 8;
+    u8* byte = &((u8*)data)[byte_index];
+    if (value) {
+        *byte |= (u8)(1u << bit_offset);
+    } else {
+        *byte &= (u8) ~(u8)(1u << bit_offset);
+    }
+}

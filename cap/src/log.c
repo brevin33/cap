@@ -35,7 +35,7 @@ bool log_has_error_after(u32 location) {
     return false;
 }
 
-static void log_get_location_sub_string_highlight(Cap_File* file, utf8 sub_string, u32 line, utf8* msg_buffer_utf8, u32* msg_buffer_capacity) {
+static void log_get_location_sub_string_highlight(Cap_File* file, utf8 sub_string, u32 line, utf8_builder* builder) {
     utf8 line_contents = cap_file_get_line(file, line);
     bool show_newline = line_contents.data + line_contents.count <= sub_string.data + sub_string.count;
     if (show_newline) {
@@ -43,31 +43,31 @@ static void log_get_location_sub_string_highlight(Cap_File* file, utf8 sub_strin
         snprintf(line_number_buffer, sizeof(line_number_buffer), "%5d", line);
         utf8 line_number_utf8 = {line_number_buffer, strlen(line_number_buffer)};
 
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, line_number_utf8);
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, utf8_str(": "));
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, line_contents);
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, utf8_str("\\n\n"));
+        utf8_builder_append(builder, line_number_utf8);
+        utf8_builder_append(builder, utf8_str(": "));
+        utf8_builder_append(builder, line_contents);
+        utf8_builder_append(builder, utf8_str("\\n\n"));
 
         char line_number_buffer2[32] = {0};
         snprintf(line_number_buffer2, sizeof(line_number_buffer2), "%5d", line);
         utf8 line_number_utf8_2 = {line_number_buffer2, strlen(line_number_buffer2)};
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, line_number_utf8_2);
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, utf8_str(": "));
+        utf8_builder_append(builder, line_number_utf8_2);
+        utf8_builder_append(builder, utf8_str(": "));
     } else {
         char line_number_buffer[32] = {0};
         snprintf(line_number_buffer, sizeof(line_number_buffer), "%5d", line);
         utf8 line_number_utf8 = {line_number_buffer, strlen(line_number_buffer)};
 
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, line_number_utf8);
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, utf8_str(": "));
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, line_contents);
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, utf8_str("\n"));
+        utf8_builder_append(builder, line_number_utf8);
+        utf8_builder_append(builder, utf8_str(": "));
+        utf8_builder_append(builder, line_contents);
+        utf8_builder_append(builder, utf8_str("\n"));
 
         char line_number_buffer2[32] = {0};
         snprintf(line_number_buffer2, sizeof(line_number_buffer2), "%5d", line);
         utf8 line_number_utf8_2 = {line_number_buffer2, strlen(line_number_buffer2)};
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, line_number_utf8_2);
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, utf8_str(": "));
+        utf8_builder_append(builder, line_number_utf8_2);
+        utf8_builder_append(builder, utf8_str(": "));
     }
     while (line_contents.count != 0) {
         char* c = line_contents.data;
@@ -77,31 +77,27 @@ static void log_get_location_sub_string_highlight(Cap_File* file, utf8 sub_strin
         char* next_c = line_contents.data;
         if (unicode == '\t') {
             if (in_sub_string) {
-                utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, utf8_str("^^^^"));
+                utf8_builder_append(builder, utf8_str("^^^^"));
             } else {
-                utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, utf8_str("    "));
+                utf8_builder_append(builder, utf8_str("    "));
             }
         } else if (unicode == '\r') {
-            utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, utf8_str("\r"));
+            utf8_builder_append(builder, utf8_str("\r"));
         } else {
             if (in_sub_string) {
-                utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, utf8_str("^"));
+                utf8_builder_append(builder, utf8_str("^"));
             } else {
-                utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, utf8_str(" "));
+                utf8_builder_append(builder, utf8_str(" "));
             }
         }
     }
     if (show_newline) {
-        utf8_append_with_capacity(msg_buffer_utf8, msg_buffer_capacity, utf8_str("^^"));
+        utf8_builder_append(builder, utf8_str("^^"));
     }
 }
 
 void log_output(Log_Level level) {
-    u32 msg_buffer_capacity_smem = 128;
-    u32* msg_buffer_capacity = &msg_buffer_capacity_smem;
-    char* msg_buffer = alloc(msg_buffer_capacity_smem);
-    utf8 msg_buffer_utf8 = {msg_buffer, 0};
-
+    utf8_builder builder = {0};
     for (u32 i = 0; i < context.logs_count; i++) {
         Log* log = context.logs + i;
         if (log->level > level) continue;
@@ -134,19 +130,19 @@ void log_output(Log_Level level) {
 
         switch (log->level) {
             case log_error: {
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\033[31mError"));
+                utf8_builder_append(&builder, utf8_str("\033[31mError"));
                 break;
             }
             case log_warning: {
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\033[33mWarning"));
+                utf8_builder_append(&builder, utf8_str("\033[33mWarning"));
                 break;
             }
             case log_info: {
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\033[36mInfo"));
+                utf8_builder_append(&builder, utf8_str("\033[36mInfo"));
                 break;
             }
             case log_debug: {
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\033[37mDebug"));
+                utf8_builder_append(&builder, utf8_str("\033[37mDebug"));
                 break;
             }
             case log_invalid: {
@@ -157,125 +153,119 @@ void log_output(Log_Level level) {
         if (log_has_location(log)) {
             Cap_File* file = log->file;
             if (line_start == line_end) {
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str(" on line "));
+                utf8_builder_append(&builder, utf8_str(" on line "));
 
                 char line_start_buf[32] = {0};
                 snprintf(line_start_buf, sizeof(line_start_buf), "%d", line_start);
 
                 utf8 line_start_utf8 = {line_start_buf, 1};
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, line_start_utf8);
+                utf8_builder_append(&builder, line_start_utf8);
 
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str(" in "));
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, file->path);
+                utf8_builder_append(&builder, utf8_str(" in "));
+                utf8_builder_append(&builder, file->path);
             } else {
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str(" on line "));
+                utf8_builder_append(&builder, utf8_str(" on line "));
 
                 char line_start_buf[32];
                 snprintf(line_start_buf, 32, "%d", line_start);
                 utf8 line_start_utf8 = {line_start_buf, strlen(line_start_buf)};
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, line_start_utf8);
+                utf8_builder_append(&builder, line_start_utf8);
 
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("-"));
+                utf8_builder_append(&builder, utf8_str("-"));
 
                 char line_end_buf[32];
                 snprintf(line_end_buf, 32, "%d", line_end);
                 utf8 line_end_utf8 = {line_end_buf, strlen(line_end_buf)};
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, line_end_utf8);
+                utf8_builder_append(&builder, line_end_utf8);
 
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str(" in "));
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, file->path);
+                utf8_builder_append(&builder, utf8_str(" in "));
+                utf8_builder_append(&builder, file->path);
             }
         }
 
         if (log->token.kind != Token_Kind_Invalid) {
             utf8 token_type_string = token_kind_to_string(log->token.kind);
-            utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str(" at "));
-            utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, token_type_string);
+            utf8_builder_append(&builder, utf8_str(" at "));
+            utf8_builder_append(&builder, token_type_string);
         }
 
         if (log->ast != NULL) {
             utf8 ast_type_string = ast_kind_to_string(log->ast->kind);
-            utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str(" at "));
-            utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, ast_type_string);
+            utf8_builder_append(&builder, utf8_str(" at "));
+            utf8_builder_append(&builder, ast_type_string);
         }
 
         if (log->ssa != NULL) {
             utf8 ssa_type_string = ssa_kind_to_string(log->ssa->kind);
             utf8 ssa_name = ssa_get_ssa_name(log->ssa);
 
-            utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str(" at "));
-            utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, ssa_name);
+            utf8_builder_append(&builder, utf8_str(" at "));
+            utf8_builder_append(&builder, ssa_name);
             switch (log->level) {
                 case log_error: {
-                    utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\033[31m"));
+                    utf8_builder_append(&builder, utf8_str("\033[31m"));
                     break;
                 }
                 case log_warning: {
-                    utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\033[33m"));
+                    utf8_builder_append(&builder, utf8_str("\033[33m"));
                     break;
                 }
                 case log_info: {
-                    utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\033[36m"));
+                    utf8_builder_append(&builder, utf8_str("\033[36m"));
                     break;
                 }
                 case log_debug: {
-                    utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\033[37m"));
+                    utf8_builder_append(&builder, utf8_str("\033[37m"));
                     break;
                 }
                 case log_invalid: {
                     internal_compiler_error();
                 }
             }
-            utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("("));
-            utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, ssa_type_string);
-            utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str(")"));
+            utf8_builder_append(&builder, utf8_str("("));
+            utf8_builder_append(&builder, ssa_type_string);
+            utf8_builder_append(&builder, utf8_str(")"));
         }
 
-        utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str(": "));
-        utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, log->msg);
-        utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\033[0m\n"));
+        utf8_builder_append(&builder, utf8_str(": "));
+        utf8_builder_append(&builder, log->msg);
+        utf8_builder_append(&builder, utf8_str("\033[0m\n"));
 
         if (log_has_location(log)) {
             Cap_File* file = log->file;
             utf8 sub_string = log->sub_string;
-
-            log_get_location_sub_string_highlight(file, sub_string, line_start, &msg_buffer_utf8, msg_buffer_capacity);
-
-            utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\n"));
-
+            log_get_location_sub_string_highlight(file, sub_string, line_start, &builder);
+            utf8_builder_append(&builder, utf8_str("\n"));
             if (line_start - line_end >= 3) {
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("       . . .\n"));
+                utf8_builder_append(&builder, utf8_str("       . . .\n"));
             }
 
             if (line_start != line_end) {
-                log_get_location_sub_string_highlight(file, sub_string, line_end, &msg_buffer_utf8, msg_buffer_capacity);
-                utf8_append_with_capacity(&msg_buffer_utf8, msg_buffer_capacity, utf8_str("\n"));
+                log_get_location_sub_string_highlight(file, sub_string, line_end, &builder);
+                utf8_builder_append(&builder, utf8_str("\n"));
             }
         }
     }
+    utf8_builder builder2 = {0};
+    builder2.capacity = builder.capacity;
+    builder2.str.data = alloc(builder2.capacity);
 
-    // swap tabs for 4 spaces
-    msg_buffer = msg_buffer_utf8.data;
-    char* msg_buffer2 = alloc(msg_buffer_capacity_smem);
-    memcpy(msg_buffer2, msg_buffer, msg_buffer_utf8.count);
-    u64 msg_buffer_index = 0;
-    for (u64 i = 0; i < msg_buffer_utf8.count; i++) {
-        if (msg_buffer2[i] == '\t') {
-            ptr_append(msg_buffer, msg_buffer_index, msg_buffer_capacity_smem, ' ');
-            ptr_append(msg_buffer, msg_buffer_index, msg_buffer_capacity_smem, ' ');
-            ptr_append(msg_buffer, msg_buffer_index, msg_buffer_capacity_smem, ' ');
-            ptr_append(msg_buffer, msg_buffer_index, msg_buffer_capacity_smem, ' ');
-        } else if (msg_buffer2[i] == '\r') {
+    for (u64 i = 0; i < builder.str.count; i++) {
+        if (builder.str.data[i] == '\t') {
+            utf8_builder_append(&builder2, utf8_str("    "));
+        } else if (builder.str.data[i] == '\r') {
             // skip
         } else {
-            ptr_append(msg_buffer, msg_buffer_index, msg_buffer_capacity_smem, msg_buffer2[i]);
+            utf8 char_utf8 = {&builder.str.data[i], 1};
+            utf8_builder_append(&builder2, char_utf8);
         }
     }
-    ptr_append(msg_buffer, msg_buffer_index, msg_buffer_capacity_smem, 0);
-    u64 msg_buffer_len = strlen(msg_buffer);
-    msg_buffer_utf8.count = msg_buffer_index;
-    if (context.log_print) printf("%.*s", utf8_fmt(msg_buffer_utf8));
-    if (context.log_file != NULL) fwrite(msg_buffer_utf8.data, 1, msg_buffer_utf8.count, context.log_file);
+    utf8 zero_utf8 = {0};
+    char zero = 0;
+    zero_utf8.data = &zero;
+    zero_utf8.count = 1;
+    utf8_builder_append(&builder2, zero_utf8);
+    printf("%.*s", utf8_fmt(builder2.str));
     log_clear();
 }
 

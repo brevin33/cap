@@ -4,12 +4,13 @@ type i32 = int_type(32)
 type i64 = int_type(64)
 
 i32, i32 foo(i16 t){
-    return t, 8   
+    return 88, t
 }
 
 i32 main(){
-    i32 a, i32 b = foo(989)
-    return a
+    i32 a, i32 b = foo(32)
+    int_type(b) c = 5 
+    return c
 }
 
 build simple{

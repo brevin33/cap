@@ -11,7 +11,6 @@ typedef enum Token_Kind {
     Token_Kind_End_Statement,
     Token_Kind_End_File,
     Token_Kind_Return,
-    Token_Kind_Build,
     Token_Kind_Int,
     Token_Kind_Float,
     Token_Kind_Scope_Start,
@@ -20,6 +19,14 @@ typedef enum Token_Kind {
     Token_Kind_Paren_Close,
     Token_Kind_Assign,
     Token_Kind_Comma,
+    Token_Kind_Build,
+    Token_Kind_Type,
+    Token_Kind_Function,
+    Token_Kind_Int_Type,
+    Token_Kind_Uint_Type,
+    Token_Kind_Float_Type,
+    Token_Kind_Void_Type,
+    Token_Kind_Compile_To_LLVM_IR,
 } Token_Kind;
 
 struct Token {

@@ -31,6 +31,13 @@ bool token_newline_after_token_kind_causes_end_statement(Token_Kind kind) {
         case Token_Kind_Paren_Close:
         case Token_Kind_Build:
         case Token_Kind_Identifier:
+        case Token_Kind_Type:
+        case Token_Kind_Function:
+        case Token_Kind_Int_Type:
+        case Token_Kind_Uint_Type:
+        case Token_Kind_Float_Type:
+        case Token_Kind_Void_Type:
+        case Token_Kind_Compile_To_LLVM_IR:
         case Token_Kind_Return:
         case Token_Kind_Int:
         case Token_Kind_Float:
@@ -71,12 +78,33 @@ utf8 token_kind_to_string(Token_Kind kind) {
             return utf8_str("Token_Kind_Paren_Close");
         case Token_Kind_Build:
             return utf8_str("Token_Kind_Build");
+        case Token_Kind_Type:
+            return utf8_str("Token_Kind_Type");
+        case Token_Kind_Function:
+            return utf8_str("Token_Kind_Function");
+        case Token_Kind_Int_Type:
+            return utf8_str("Token_Kind_Int_Type");
+        case Token_Kind_Uint_Type:
+            return utf8_str("Token_Kind_Uint_Type");
+        case Token_Kind_Float_Type:
+            return utf8_str("Token_Kind_Float_Type");
+        case Token_Kind_Void_Type:
+            return utf8_str("Token_Kind_Void_Type");
+        case Token_Kind_Compile_To_LLVM_IR:
+            return utf8_str("Token_Kind_Compile_To_LLVM_IR");
     }
 }
 
 Token_Kind token_kind_for_identifier(utf8 word) {
     if (utf8_equal(word, utf8_str("return"))) return Token_Kind_Return;
     if (utf8_equal(word, utf8_str("build"))) return Token_Kind_Build;
+    if (utf8_equal(word, utf8_str("type"))) return Token_Kind_Type;
+    if (utf8_equal(word, utf8_str("function"))) return Token_Kind_Function;
+    if (utf8_equal(word, utf8_str("int_type"))) return Token_Kind_Int_Type;
+    if (utf8_equal(word, utf8_str("uint_type"))) return Token_Kind_Uint_Type;
+    if (utf8_equal(word, utf8_str("float_type"))) return Token_Kind_Float_Type;
+    if (utf8_equal(word, utf8_str("void_type"))) return Token_Kind_Void_Type;
+    if (utf8_equal(word, utf8_str("compile_to_llvm_ir"))) return Token_Kind_Compile_To_LLVM_IR;
     return Token_Kind_Identifier;
 }
 

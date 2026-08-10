@@ -21,6 +21,7 @@ typedef struct Ast_Call Ast_Call;
 typedef struct Ast_Argument_List Ast_Argument_List;
 typedef struct Ast_Build Ast_Build;
 typedef struct Ast_Assign Ast_Assign;
+typedef struct Ast_Load Ast_Load;
 
 typedef struct Scope Scope;
 typedef struct Scope_Variable Scope_Variable;
@@ -43,8 +44,15 @@ typedef enum Ast_Kind {
     Ast_Kind_Call,
     Ast_Kind_Argument_List,
     Ast_Kind_Build,
-    Ast_Kind_Intrinsic,
     Ast_Kind_Assign,
+    Ast_Kind_Load,
+    Ast_Kind_Intrinsic_Int_Type,
+    Ast_Kind_Intrinsic_Uint_Type,
+    Ast_Kind_Intrinsic_Float_Type,
+    Ast_Kind_Intrinsic_Compile_To_LLVM_IR,
+    Ast_Kind_Intrinsic_Type,
+    Ast_Kind_Intrinsic_Function,
+    Ast_Kind_Intrinsic_Void,
 } Ast_Kind;
 
 struct Ast_File {
@@ -127,6 +135,10 @@ struct Ast_Call {
     Ast* argument_list;
 };
 
+struct Ast_Load {
+    Ast* address;
+};
+
 struct Ast_Argument_List {
     Ast* arguments;
     u32 arguments_count;
@@ -138,19 +150,6 @@ struct Ast_Assign {
     u32 lhs_count;
     u32 rhs_count;
 };
-
-typedef enum Ast_Intrinsic {
-    Ast_Intrinsic_Invalid = 0,
-    Ast_Intrinsic_Int_Type,
-    Ast_Intrinsic_Uint_Type,
-    Ast_Intrinsic_Float_Type,
-    Ast_Intrinsic_Compile_To_LLVM_IR,
-    Ast_Intrinsic_Type,
-    Ast_Intrinsic_Function,
-    Ast_Intrinsic_Void,
-    Ast_Intrinsic_Int_Literal,
-    Ast_Intrinsic_Float_Literal,
-} Ast_Intrinsic;
 
 union Ast_Data {
     Ast_File file;
@@ -167,8 +166,8 @@ union Ast_Data {
     Ast_Function_Declaration function_declaration;
     Ast_Call call;
     Ast_Argument_List argument_list;
-    Ast_Intrinsic intrinsic;
     Ast_Assign assign;
+    Ast_Load load;
 };
 
 struct Ast {
@@ -176,6 +175,8 @@ struct Ast {
     Tokens tokens;
     Cap_File* file;
     Ast_Data data;
+    // flags
+    bool is_reference;
 };
 
 struct Scope_Variable {
@@ -217,22 +218,21 @@ Ast ast_top_level_statement(Tokens* tokens, Cap_File* file);
 Ast ast_scoped_statement(Tokens* tokens, Cap_File* file);
 Ast ast_statement_starting_with_expression(Tokens* tokens, Cap_File* file);
 Ast ast_expression(Tokens* tokens, Cap_File* file);
+Ast ast_expression_non_ref(Tokens* tokens, Cap_File* file);
 
 Ast ast_scope(Tokens* tokens, Cap_File* file);
 Ast ast_return(Tokens* tokens, Cap_File* file);
 Ast ast_int(Tokens* tokens, Cap_File* file);
 Ast ast_float(Tokens* tokens, Cap_File* file);
 Ast ast_variable(Tokens* tokens, Cap_File* file);
-Ast ast_variable_declaration(Tokens* tokens, Cap_File* file, Ast* type);
+Ast ast_variable_declaration(Tokens* tokens, Cap_File* file, Ast type);
 Ast ast_binary_operation(Tokens* tokens, Cap_File* file, Ast* lhs, Ast* rhs, Token_Kind operator);
 Ast ast_parameter(Tokens* tokens, Cap_File* file);
 Ast ast_parameter_list(Tokens* tokens, Cap_File* file);
 Ast ast_function_declaration(Tokens* tokens, Cap_File* file);
-Ast ast_call(Tokens* tokens, Cap_File* file, Ast* callee);
+Ast ast_call(Tokens* tokens, Cap_File* file, Ast callee);
 Ast ast_argument_list(Tokens* tokens, Cap_File* file);
 Ast ast_build(Tokens* tokens, Cap_File* file);
-
-void ast_setup_intrinsics();
 
 bool ast_resolve_variables(Ast* ast, Scope* scope);
 bool ast_top_level_prototype_resolve_variables(Ast* ast, Scope* scope);
@@ -240,3 +240,5 @@ bool ast_top_level_implement_resolve_variables(Ast* ast, Scope* scope);
 
 Scope_Variable* ast_find_variable_in_scope(Scope* scope, utf8 name, Ast* ast);
 Scope_Variable* ast_add_variable_to_scope(Scope* scope, utf8 name, Ast* ast);
+
+Ast ast_load_if_ref(Ast possible_ref);

@@ -101,3 +101,30 @@ void utf8_append_with_capacity(utf8* base, u32* capacity, utf8 str) {
     memcpy(base->data + base->count, str.data, str.count);
     base->count += str.count;
 }
+
+utf8 utf8_append(utf8 base, utf8 str) {
+    i64 new_size = str.count + base.count;
+    void* new_memory = alloc(new_size);
+    memcpy(new_memory, base.data, base.count);
+    memcpy(((char*)new_memory) + base.count, str.data, str.count);
+    utf8 new_str = {0};
+    new_str.data = new_memory;
+    new_str.count = new_size;
+    return new_str;
+}
+
+void utf8_builder_append(utf8_builder* builder, utf8 str) {
+    i64 amount_over_capacity = (str.count + builder->str.count) - (builder->capacity);
+    if (amount_over_capacity >= 0) {
+        u32 capacity2 = builder->capacity * 2;
+        if (amount_over_capacity > capacity2) {
+            capacity2 = capacity2 + amount_over_capacity * 2;
+        }
+        char* new_memory = alloc(capacity2);
+        memcpy(new_memory, builder->str.data, builder->str.count);
+        builder->str.data = new_memory;
+        builder->capacity = capacity2;
+    }
+    memcpy(builder->str.data + builder->str.count, str.data, str.count);
+    builder->str.count += str.count;
+}

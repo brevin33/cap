@@ -18,20 +18,11 @@ void* alloc(u64 size) {
 
 int cap_init(utf8 dir) {
     context.arena = arena_init(MB(4), NULL);
-    FILE* file = NULL;
-    errno_t err = fopen_s(&file, "cap_compiler_log.txt", "w");
-    if (err != 0 || file == NULL) {
-        printf("Failed to open log file\n");
-    }
-    context.log_file = file;
     int res = _chdir(dir.data);
     if (res != 0) {
         printf("Failed to change directory to: %.*s\n", utf8_fmt(dir));
         return -1;
     }
-    context.log_print = true;
-
-    ast_setup_intrinsics();
 
     context.evaluate_context = alloc(sizeof(Evaluate_Context));
     Function_Context* global_function_context = alloc(sizeof(Function_Context));
